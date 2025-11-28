@@ -1,0 +1,4 @@
+/home/mao/cs380_final/project/build/CMakeFiles/cuda_solver.dir
+/home/mao/cs380_final/project/build/CMakeFiles/clothsim.dir
+/home/mao/cs380_final/project/build/CMakeFiles/edit_cache.dir
+/home/mao/cs380_final/project/build/CMakeFiles/rebuild_cache.dir
