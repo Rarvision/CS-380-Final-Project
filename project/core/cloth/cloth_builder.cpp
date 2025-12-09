@@ -14,22 +14,23 @@ ClothModel build_regular_grid(const ClothBuildParams& p)
     c.fixed.assign(n_vertices, 0u);
     c.mass_per_node = p.mass;
 
-    // 简单生成一个位于 XZ 平面、Y 为 0 的网格，上边缘在 +Z
+    // 约定：布在 XY 平面；X 水平，Y“向下”为正
+    // y = 0 行作为“屏幕上边缘”
     const f32 w = (p.nx - 1) * p.spacing;
     const f32 h = (p.ny - 1) * p.spacing;
-    const Vec3 origin = Vec3(-0.5f * w, 0.0f, 0.0f);
+    const Vec3 origin = Vec3(-0.5f * w, 0.0f, 0.0f); // 顶边在 y = 0
 
     for (u32 y = 0; y < p.ny; ++y) {
         for (u32 x = 0; x < p.nx; ++x) {
             const u32 idx = y * p.nx + x;
-            f32 px = origin.x + x * p.spacing;
-            f32 py = origin.y;                // 初始平面
-            f32 pz = origin.z + y * p.spacing;
+            float px = origin.x + x * p.spacing;
+            float py = origin.y + y * p.spacing; // y 越大越“往下”
+            float pz = 0.0f;
             c.positions[idx] = Vec3(px, py, pz);
         }
     }
 
-    // 三角索引（两三角组成一个 quad）
+    // indices / springs 原样
     for (u32 y = 0; y < p.ny - 1; ++y) {
         for (u32 x = 0; x < p.nx - 1; ++x) {
             u32 i0 = y * p.nx + x;
@@ -37,7 +38,6 @@ ClothModel build_regular_grid(const ClothBuildParams& p)
             u32 i2 = (y + 1) * p.nx + x;
             u32 i3 = (y + 1) * p.nx + (x + 1);
 
-            // 约定同向（三角剖分）
             c.indices.push_back(i0);
             c.indices.push_back(i2);
             c.indices.push_back(i1);
@@ -67,7 +67,7 @@ void tag_pins_top_edge(ClothModel& c)
 {
     // “顶边”：y = ny - 1 行
     for (u32 x = 0; x < c.nx; ++x) {
-        u32 idx = (c.ny - 1) * c.nx + x;
+        u32 idx = 0 * c.nx + x;
         c.fixed[idx] = 1u;
     }
 }

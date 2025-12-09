@@ -13,6 +13,10 @@ public:
     VulkanRenderer() = default;
     ~VulkanRenderer();
 
+    const glm::mat4& view() const { return view_; }
+    const glm::mat4& proj() const { return proj_; }
+    // glm::mat4 mvp_ = glm::mat4(1.0f);
+
     bool init(GLFWwindow* window, uint32_t width, uint32_t height);
     void update_mesh(const std::vector<Vertex>& vertices,
                      const std::vector<u32>& indices);
@@ -60,8 +64,16 @@ private:
     VkDeviceMemory index_buffer_memory_{VK_NULL_HANDLE};
     size_t         index_count_{0};
 
+    size_t index_buffer_size_{0};
+
     //
     bool           cb_recorded_{false};
+
+    // MVP
+    glm::mat4 proj_{1.0f};
+    glm::mat4 view_{1.0f};
+    glm::mat4 model_{1.0f};
+    glm::mat4 mvp_{1.0f};
 
     // ==== 内部初始化步骤 ====
     bool create_instance();
@@ -84,6 +96,7 @@ private:
 
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
     void cleanup_swapchain();
+    void cleanup_vertex_index_buffers();
 
     // 辅助
     VkShaderModule create_shader_module(const std::vector<char>& code);

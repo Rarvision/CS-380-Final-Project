@@ -45,6 +45,15 @@ public:
         solver_->download_positions_normals(out_pos, out_normals);
     }
 
+    void apply_click_impulse(const Vec3& pos_ws,
+                             f32 radius,
+                             f32 strength)
+    {
+        if (solver_) {
+            solver_->apply_click_impulse(pos_ws, radius, strength);
+        }
+    }   
+
 private:
     std::unique_ptr<IPhysicsSolver> solver_;
     Scene scene_;

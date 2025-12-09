@@ -19,11 +19,16 @@ public:
     void download_positions_normals(
         std::vector<Vec3>& out_pos,
         std::vector<Vec3>& out_normals) override;
+    
+    void apply_click_impulse(const Vec3& pos_ws,
+                             f32 radius,
+                             f32 strength) override;
 
 private:
     CudaClothDevice dev_{};
-    f32 damping_{0.01f};
+    f32 damping_{0.02f};
     f32 ground_y_{-1.0f};
+    float time_ = 0.0f;
 
     void substep(f32 dt, const ExternalForces& f);
 };

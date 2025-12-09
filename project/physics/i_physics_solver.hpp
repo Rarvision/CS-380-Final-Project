@@ -6,11 +6,14 @@
 
 struct ExternalForces {
     Vec3 gravity{0.0f, -9.81f, 0.0f};
+
     Vec3 wind_dir{1.0f, 0.0f, 0.0f};
-    f32  wind_strength{0.0f};
-    bool dragging{false};
-    Vec3 drag_pos_ws{0.0f};
-    f32  drag_force{0.0f};
+    float wind_strength{0.0f};
+
+    bool  has_click_impulse{false};
+    Vec3  click_pos_ws{0.0f};
+    float click_strength{0.0f};
+    float click_radius{0.25f};
 };
 
 class IPhysicsSolver {
@@ -29,4 +32,13 @@ public:
     virtual void download_positions_normals(
         std::vector<Vec3>& out_pos,
         std::vector<Vec3>& out_normals) = 0;
+
+    virtual void apply_click_impulse(const Vec3& pos_ws,
+                                     f32 radius,
+                                     f32 strength)
+    {
+        (void)pos_ws;
+        (void)radius;
+        (void)strength;
+    }
 };

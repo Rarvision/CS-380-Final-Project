@@ -12,21 +12,35 @@
 #include "../core/common/types.hpp"
 
 // 为 device 使用简单 float3 运算
+__host__ __device__ inline float3 make_f3(float x, float y, float z) {
+    return make_float3(x, y, z);
+}
+
+__host__ __device__ inline float3 make_f3(const Vec3& v) {
+    return make_float3(v.x, v.y, v.z);
+}
+
+__host__ __device__ inline Vec3 to_vec3(const float3& f) {
+    return Vec3(f.x, f.y, f.z);
+}
+
+// ======= float3 基础运算 =======
 __device__ inline float3 f3_add(const float3& a, const float3& b) {
     return make_float3(a.x + b.x, a.y + b.y, a.z + b.z);
 }
+
 __device__ inline float3 f3_sub(const float3& a, const float3& b) {
     return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
 }
+
 __device__ inline float3 f3_scale(const float3& a, float s) {
     return make_float3(a.x * s, a.y * s, a.z * s);
 }
-__device__ inline float f3_dot(const float3& a, const float3& b) {
+
+__device__ inline float  f3_dot(const float3& a, const float3& b) {
     return a.x*b.x + a.y*b.y + a.z*b.z;
 }
-__device__ inline float f3_len(const float3& a) {
-    return sqrtf(f3_dot(a,a));
-}
+
 __device__ inline float3 f3_cross(const float3& a, const float3& b) {
     return make_float3(
         a.y*b.z - a.z*b.y,
@@ -35,6 +49,18 @@ __device__ inline float3 f3_cross(const float3& a, const float3& b) {
     );
 }
 
+__device__ inline float  f3_len(const float3& a) {
+    return sqrtf(f3_dot(a,a));
+}
+
+__device__ inline float3 f3_normalize(const float3& a) {
+    float len = f3_len(a);
+    if (len < 1e-6f) return make_float3(0.f, 0.f, 0.f);
+    float inv = 1.0f / len;
+    return f3_scale(a, inv);
+}
+
+// ======= float3 的 atomicAdd =======
 struct SpringDev {
     u32 i;
     u32 j;
@@ -104,27 +130,86 @@ __global__ void kernel_apply_springs(
     atomicAddFloat3(&force[s.j],  f3_scale(f, -1.0f));
 }
 
-__global__ void kernel_apply_wind(float3* force, u32 n, float3 wind_dir, float strength)
+__global__ void kernel_apply_wind(
+    float3* pos,
+    float3* normal,
+    float3* force,
+    u32 n,
+    float3 wind_dir,
+    float strength,
+    float time)
 {
     u32 idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
-    force[idx] = f3_add(force[idx], f3_scale(wind_dir, strength));
+
+    // 归一化风向
+    float3 wdir = f3_normalize(wind_dir);
+
+    float3 p   = pos[idx];
+    float3 nrm = f3_normalize(normal[idx]);
+
+    // ---------- 1) 只对“迎风面”施力 ----------
+    float ndot = f3_dot(nrm, wdir);              // 法线与风向的夹角
+    float facing = fmaxf(ndot, 0.0f);            // 背风面不受风/受很小风
+
+    // 基础风力（方向 = 风向）
+    float3 F_base = f3_scale(wdir, strength * facing);
+
+    // ---------- 2) 空间 + 时间噪声，制造旗子上的“涟漪” ----------
+    // 频率可以调节：freq 控制波长；time_freq 控制时间变化速度
+    const float freq      = 8.0f;    // 空间频率：越大图案越密
+    const float time_freq = 1.5f;    // 时间频率：越大变化越快
+
+    float phase = freq * (p.x + 0.5f * p.y) + time_freq * time;
+    float noise = __sinf(phase) * __cosf(0.7f * phase + 1.3f); // [-1,1] 左右
+
+    // 让噪声幅值小一些，避免把布吹炸
+    const float noise_scale = 0.3f;  // 占整体强度的大约 30%
+    float  noise_strength   = strength * noise_scale * noise;
+
+    // 噪声方向：取一个垂直于风向的向量，让布有“横向摆动”
+    float3 up    = make_float3(0.0f, 1.0f, 0.0f);
+    float3 side  = f3_cross(wdir, up);
+    if (f3_len(side) < 1e-4f) {
+        // 避免 wdir 跟 up 平行
+        side = f3_cross(wdir, make_float3(0.0f, 0.0f, 1.0f));
+    }
+    side = f3_normalize(side);
+
+    float3 F_turb = f3_scale(side, noise_strength);
+
+    // ---------- 3) 合成风力 ----------
+    float3 F_total = f3_add(F_base, F_turb);
+    force[idx]     = f3_add(force[idx], F_total);
 }
 
-__global__ void kernel_apply_drag(
-    float3* pos, float3* force, u32 n,
-    float3 drag_pos, float strength, float radius)
+
+__global__ void kernel_click_impulse(
+    float3* pos, float3* vel, u32 n,
+    float3 click_pos, float strength, float radius)
 {
     u32 idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
 
     float3 p = pos[idx];
-    float3 d = f3_sub(drag_pos, p);
+    float3 d = f3_sub(p, click_pos); // 从点击中心指向粒子（往外推）
     float dist = f3_len(d);
     if (dist < radius && dist > 1e-6f) {
+        // 基于距离的权重：中心最大，边缘为 0
+        float w = (radius - dist) / radius; // 0..1
+
+        // 单位方向
         float3 dir = f3_scale(d, 1.0f / dist);
-        float w = (radius - dist) / radius;
-        force[idx] = f3_add(force[idx], f3_scale(dir, strength * w));
+
+        // 原本的冲量大小
+        float impulse = strength * w;
+
+        // ⭐ 限制单点最大速度增量，防止一次性拉太猛
+        const float max_dv = 4.0f;
+        if (impulse > max_dv) impulse = max_dv;
+
+        float3 dv = f3_scale(dir, impulse);
+        vel[idx] = f3_add(vel[idx], dv);
     }
 }
 
@@ -213,6 +298,7 @@ CudaSolver::CudaSolver()
 {
     d_force.d_ptr = nullptr;
     d_force.bytes = 0;
+    time_ = 0.0f;
 }
 
 CudaSolver::~CudaSolver()
@@ -237,33 +323,53 @@ void CudaSolver::upload(const ClothModel& model)
     dev_.n_springs  = static_cast<u32>(model.springs.size());
     dev_.n_indices  = static_cast<u32>(model.indices.size());
 
-    // pos / vel -> float3
-    std::vector<float3> h_pos(dev_.n_vertices);
-    std::vector<float3> h_vel(dev_.n_vertices);
-    for (u32 i = 0; i < dev_.n_vertices; ++i) {
-        const Vec3& p = model.positions[i];
-        const Vec3& v = model.velocities[i];
-        h_pos[i] = make_float3(p.x, p.y, p.z);
-        h_vel[i] = make_float3(v.x, v.y, v.z);
-    }
-    upload_vector<float3>(dev_.pos, h_pos);
-    upload_vector<float3>(dev_.vel, h_vel);
+    // 分配 pos / vel / normal / force 都按 float3 计
+    alloc_cuda_buffer<float3>(dev_.pos, dev_.n_vertices);
+    alloc_cuda_buffer<float3>(dev_.vel, dev_.n_vertices);
     alloc_cuda_buffer<float3>(dev_.normal, dev_.n_vertices);
+    alloc_cuda_buffer<float3>(d_force, dev_.n_vertices);
 
-    // indices / fixed
+    // host -> device: Vec3 数组转 float3 数组
+    std::vector<float3> tmp_pos(dev_.n_vertices);
+    std::vector<float3> tmp_vel(dev_.n_vertices, make_float3(0.f, 0.f, 0.f));
+    for (u32 i = 0; i < dev_.n_vertices; ++i) {
+        tmp_pos[i] = make_f3(model.positions[i]);
+        // 如果你 ClothModel 里暂时没用 velocities，可以先全 0
+        // 否则 tmp_vel[i] = make_f3(model.velocities[i]);
+    }
+    cudaMemcpy(dev_.pos.d_ptr, tmp_pos.data(),
+               dev_.n_vertices * sizeof(float3), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_.vel.d_ptr, tmp_vel.data(),
+               dev_.n_vertices * sizeof(float3), cudaMemcpyHostToDevice);
+
+    // indices / fixed 可以直接按 u32 传
     upload_vector<u32>(dev_.indices, model.indices);
-    upload_vector<u32>(dev_.fixed, model.fixed);
+    upload_vector<u32>(dev_.fixed,   model.fixed);
 
-    // springs
+    // springs 同前，只是保持 SpringDev 类型
     std::vector<SpringDev> springs_dev(dev_.n_springs);
     for (u32 i = 0; i < dev_.n_springs; ++i) {
         const Spring& s = model.springs[i];
         springs_dev[i] = { s.i, s.j, s.rest, s.k };
     }
     upload_vector<SpringDev>(dev_.springs, springs_dev);
+}
 
-    // force buffer
-    alloc_cuda_buffer<float3>(d_force, dev_.n_vertices);
+void CudaSolver::apply_click_impulse(const Vec3& pos_ws,
+                                     f32 radius,
+                                     f32 strength)
+{
+    if (dev_.n_vertices == 0) return;
+
+    float3* d_pos = reinterpret_cast<float3*>(dev_.pos.d_ptr);
+    float3* d_vel = reinterpret_cast<float3*>(dev_.vel.d_ptr);
+
+    const int blockSize = 256;
+    int gridVerts = (dev_.n_vertices + blockSize - 1) / blockSize;
+
+    float3 cpos = make_f3(pos_ws);
+    kernel_click_impulse<<<gridVerts, blockSize>>>(
+        d_pos, d_vel, dev_.n_vertices, cpos, strength, radius);
 }
 
 void CudaSolver::substep(f32 dt, const ExternalForces& f)
@@ -277,6 +383,7 @@ void CudaSolver::substep(f32 dt, const ExternalForces& f)
     float3* d_norm  = reinterpret_cast<float3*>(dev_.normal.d_ptr);
     u32*    d_idx   = reinterpret_cast<u32*>(dev_.indices.d_ptr);
     u32*    d_fixed = reinterpret_cast<u32*>(dev_.fixed.d_ptr);
+    // SpringDev* d_s  = reinterpret_cast<SpringDev*>(dev_.springs.d_ptr);
     float3* d_f     = reinterpret_cast<float3*>(d_force.d_ptr);
 
     const int blockSize = 256;
@@ -284,18 +391,19 @@ void CudaSolver::substep(f32 dt, const ExternalForces& f)
     int gridSprings = (nSprings + blockSize - 1) / blockSize;
     int gridTris    = (nIndices / 3 + blockSize - 1) / blockSize;
 
+    time_ += dt;
     // 1. 清力
     kernel_clear_forces<<<gridVerts, blockSize>>>(d_f, nVerts);
 
-    // 2. 风 / 拖拽
+    // 2. 风
     if (f.wind_strength > 0.0f) {
-        float3 wdir = make_float3(f.wind_dir.x, f.wind_dir.y, f.wind_dir.z);
-        kernel_apply_wind<<<gridVerts, blockSize>>>(d_f, nVerts, wdir, f.wind_strength);
-    }
-    if (f.dragging && f.drag_force > 0.0f) {
-        float3 dragPos = make_float3(f.drag_pos_ws.x, f.drag_pos_ws.y, f.drag_pos_ws.z);
-        kernel_apply_drag<<<gridVerts, blockSize>>>(
-            d_pos, d_f, nVerts, dragPos, f.drag_force, 0.2f);
+    float3 wdir = make_f3(f.wind_dir);  // 你已经有 make_f3(Vec3) 了
+    kernel_apply_wind<<<gridVerts, blockSize>>>(
+        d_pos, d_norm, d_f,
+        nVerts,
+        wdir,
+        f.wind_strength,
+        time_);
     }
 
     // 3. 弹簧
@@ -349,14 +457,13 @@ void CudaSolver::download_positions_normals(
     std::vector<float3> tmp_pos(dev_.n_vertices);
     std::vector<float3> tmp_norm(dev_.n_vertices);
 
-    float3* d_pos  = reinterpret_cast<float3*>(dev_.pos.d_ptr);
-    float3* d_norm = reinterpret_cast<float3*>(dev_.normal.d_ptr);
-
-    cudaMemcpy(tmp_pos.data(),  d_pos,  dev_.n_vertices * sizeof(float3), cudaMemcpyDeviceToHost);
-    cudaMemcpy(tmp_norm.data(), d_norm, dev_.n_vertices * sizeof(float3), cudaMemcpyDeviceToHost);
+    cudaMemcpy(tmp_pos.data(), dev_.pos.d_ptr,
+               dev_.n_vertices * sizeof(float3), cudaMemcpyDeviceToHost);
+    cudaMemcpy(tmp_norm.data(), dev_.normal.d_ptr,
+               dev_.n_vertices * sizeof(float3), cudaMemcpyDeviceToHost);
 
     for (u32 i = 0; i < dev_.n_vertices; ++i) {
-        out_pos[i]    = Vec3(tmp_pos[i].x,  tmp_pos[i].y,  tmp_pos[i].z);
-        out_normals[i]= Vec3(tmp_norm[i].x,tmp_norm[i].y,tmp_norm[i].z);
+        out_pos[i]    = to_vec3(tmp_pos[i]);
+        out_normals[i]= to_vec3(tmp_norm[i]);
     }
 }

@@ -10,6 +10,10 @@
 #include <iostream>
 #include <algorithm>
 
+#include <glm/glm.hpp>
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
+
 // =================== 辅助结构 ===================
 
 struct QueueFamilyIndices {
@@ -125,45 +129,73 @@ static VkExtent2D choose_swap_extent(const VkSurfaceCapabilitiesKHR& caps, uint3
 
 VulkanRenderer::~VulkanRenderer()
 {
-    wait_idle();
+    // std::cerr << "[VK] ~VulkanRenderer begin\n";
+
+    if (device_ != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(device_);
+    }
+
+    cleanup_vertex_index_buffers();
 
     cleanup_swapchain();
 
-    if (vertex_buffer_) {
-        vkDestroyBuffer(device_, vertex_buffer_, nullptr);
-        vkFreeMemory(device_, vertex_buffer_memory_, nullptr);
-    }
-    if (index_buffer_) {
-        vkDestroyBuffer(device_, index_buffer_, nullptr);
-        vkFreeMemory(device_, index_buffer_memory_, nullptr);
-    }
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        if (image_available_semaphores_[i]) {
+    for (size_t i = 0; i < image_available_semaphores_.size(); ++i) {
+        if (image_available_semaphores_[i] != VK_NULL_HANDLE) {
             vkDestroySemaphore(device_, image_available_semaphores_[i], nullptr);
         }
-        if (render_finished_semaphores_[i]) {
+    }
+    for (size_t i = 0; i < render_finished_semaphores_.size(); ++i) {
+        if (render_finished_semaphores_[i] != VK_NULL_HANDLE) {
             vkDestroySemaphore(device_, render_finished_semaphores_[i], nullptr);
         }
-        if (in_flight_fences_[i]) {
+    }
+    for (size_t i = 0; i < in_flight_fences_.size(); ++i) {
+        if (in_flight_fences_[i] != VK_NULL_HANDLE) {
             vkDestroyFence(device_, in_flight_fences_[i], nullptr);
         }
     }
+    image_available_semaphores_.clear();
+    render_finished_semaphores_.clear();
+    in_flight_fences_.clear();
 
-    if (command_pool_) {
+    if (graphics_pipeline_ != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device_, graphics_pipeline_, nullptr);
+        graphics_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (pipeline_layout_ != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
+        pipeline_layout_ = VK_NULL_HANDLE;
+    }
+    if (render_pass_ != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device_, render_pass_, nullptr);
+        render_pass_ = VK_NULL_HANDLE;
+    }
+
+    if (command_pool_ != VK_NULL_HANDLE) {
         vkDestroyCommandPool(device_, command_pool_, nullptr);
+        command_pool_ = VK_NULL_HANDLE;
+    }
+    command_buffers_.clear();
+
+    if (device_ != VK_NULL_HANDLE) {
+        vkDestroyDevice(device_, nullptr);
+        device_ = VK_NULL_HANDLE;
     }
 
-    if (device_) {
-        vkDestroyDevice(device_, nullptr);
-    }
-    if (surface_) {
+    if (surface_ != VK_NULL_HANDLE) {
         vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
     }
-    if (instance_) {
+
+    if (instance_ != VK_NULL_HANDLE) {
         vkDestroyInstance(instance_, nullptr);
+        instance_ = VK_NULL_HANDLE;
     }
+
+    // std::cerr << "[VK] ~VulkanRenderer end\n";
+
 }
+
 
 bool VulkanRenderer::init(GLFWwindow* window, uint32_t width, uint32_t height)
 {
@@ -185,6 +217,24 @@ bool VulkanRenderer::init(GLFWwindow* window, uint32_t width, uint32_t height)
     // 先创建一个空的顶点/索引缓冲（后面 update_mesh 会重建）
     create_vertex_buffer(sizeof(Vertex) * 1);
     create_index_buffer(sizeof(uint32_t) * 1);
+
+    // ====== 计算一个简单 MVP 矩阵 ======
+    float aspect = static_cast<float>(swapchain_extent_.width) /
+                   static_cast<float>(swapchain_extent_.height);
+
+    proj_ = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
+    // Vulkan NDC 的 Y 是反的，通常要翻一下glm::mat4 proj
+    proj_[1][1] *= -1.0f;
+
+    view_ = glm::lookAt(
+        glm::vec3(0.0f, 0.2f, -5.0f),  // 相机位置：稍微在前面、略微偏上
+        glm::vec3(0.0f, 0.0f, 0.0f),  // 看向原点
+        glm::vec3(0.0f, 1.0f, 0.0f)   // 世界向上方向
+    );
+
+    model_ = glm::mat4(1.0f); // 后面要旋转布的话就改这里
+
+    mvp_ = proj_ * view_ * model_;
 
     // record_command_buffers();
     return true;
@@ -463,7 +513,6 @@ VkShaderModule VulkanRenderer::create_shader_module(const std::vector<char>& cod
 
 bool VulkanRenderer::create_graphics_pipeline()
 {
-    // 读取 SPIR-V 着色器（你需要先用 glslc 编译）
     auto vertCode = read_file("../assets/shaders/cloth.vert.spv");
     auto fragCode = read_file("../assets/shaders/cloth.frag.spv");
 
@@ -545,10 +594,22 @@ bool VulkanRenderer::create_graphics_pipeline()
     colorBlend.attachmentCount = 1;
     colorBlend.pAttachments    = &colorBlendAttachment;
 
+    // VkPipelineLayoutCreateInfo layoutInfo{};
+    // layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    // layoutInfo.setLayoutCount = 0;
+    // layoutInfo.pushConstantRangeCount = 0;
+
+    VkPushConstantRange pcRange{};
+    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcRange.offset     = 0;
+    pcRange.size       = sizeof(glm::mat4);
+
     VkPipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 0;
-    layoutInfo.pushConstantRangeCount = 0;
+    layoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount         = 0;
+    layoutInfo.pSetLayouts            = nullptr;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges    = &pcRange;
 
     if (vkCreatePipelineLayout(device_, &layoutInfo, nullptr, &pipeline_layout_) != VK_SUCCESS) {
         std::cerr << "Failed to create pipeline layout\n";
@@ -674,7 +735,6 @@ bool VulkanRenderer::create_vertex_buffer(size_t size_bytes)
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(device_, &info, nullptr, &vertex_buffer_) != VK_SUCCESS) {
-        std::cerr << "Failed to create vertex buffer\n";
         return false;
     }
 
@@ -689,7 +749,6 @@ bool VulkanRenderer::create_vertex_buffer(size_t size_bytes)
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     if (vkAllocateMemory(device_, &alloc, nullptr, &vertex_buffer_memory_) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate vertex buffer memory\n";
         return false;
     }
 
@@ -697,8 +756,11 @@ bool VulkanRenderer::create_vertex_buffer(size_t size_bytes)
     return true;
 }
 
+
 bool VulkanRenderer::create_index_buffer(size_t size_bytes)
 {
+    index_buffer_size_ = size_bytes;
+
     VkBufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     info.size  = size_bytes;
@@ -706,7 +768,6 @@ bool VulkanRenderer::create_index_buffer(size_t size_bytes)
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(device_, &info, nullptr, &index_buffer_) != VK_SUCCESS) {
-        std::cerr << "Failed to create index buffer\n";
         return false;
     }
 
@@ -721,13 +782,13 @@ bool VulkanRenderer::create_index_buffer(size_t size_bytes)
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     if (vkAllocateMemory(device_, &alloc, nullptr, &index_buffer_memory_) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate index buffer memory\n";
         return false;
     }
 
     vkBindBufferMemory(device_, index_buffer_, index_buffer_memory_, 0);
     return true;
 }
+
 
 void VulkanRenderer::update_mesh(const std::vector<Vertex>& vertices,
                                  const std::vector<u32>& indices)
@@ -736,25 +797,35 @@ void VulkanRenderer::update_mesh(const std::vector<Vertex>& vertices,
 //              << " indices=" << indices.size() << std::endl;
 
     size_t vbytes = vertices.size() * sizeof(Vertex);
-    size_t ibytes = indices.size()  * sizeof(u32);
+    size_t ibytes = indices.size()  * sizeof(uint32_t);
 
-    // 如果 buffer 不够大，就重建
-    if (!vertex_buffer_ || vbytes > vertex_buffer_size_) {
-        if (vertex_buffer_) {
+    if (vertex_buffer_ == VK_NULL_HANDLE || vbytes > vertex_buffer_size_) {
+        if (vertex_buffer_ != VK_NULL_HANDLE) {
             vkDestroyBuffer(device_, vertex_buffer_, nullptr);
             vkFreeMemory(device_, vertex_buffer_memory_, nullptr);
+            vertex_buffer_ = VK_NULL_HANDLE;
+            vertex_buffer_memory_ = VK_NULL_HANDLE;
+            vertex_buffer_size_ = 0;
         }
-        create_vertex_buffer(vbytes);
-    }
-    if (!index_buffer_ || ibytes > index_count_ * sizeof(u32)) {
-        if (index_buffer_) {
-            vkDestroyBuffer(device_, index_buffer_, nullptr);
-            vkFreeMemory(device_, index_buffer_memory_, nullptr);
+        if (!create_vertex_buffer(vbytes)) {
+            throw std::runtime_error("Failed to create vertex buffer");
         }
-        create_index_buffer(ibytes);
     }
 
-    // CPU → GPU（host-visible）
+    if (index_buffer_ == VK_NULL_HANDLE || ibytes > index_buffer_size_) {
+        if (index_buffer_ != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device_, index_buffer_, nullptr);
+            vkFreeMemory(device_, index_buffer_memory_, nullptr);
+            index_buffer_ = VK_NULL_HANDLE;
+            index_buffer_memory_ = VK_NULL_HANDLE;
+            index_buffer_size_ = 0;
+        }
+        if (!create_index_buffer(ibytes)) {
+            throw std::runtime_error("Failed to create index buffer");
+        }
+    }
+
+    // CPU → GPU 拷贝
     void* data = nullptr;
     vkMapMemory(device_, vertex_buffer_memory_, 0, vbytes, 0, &data);
     std::memcpy(data, vertices.data(), vbytes);
@@ -765,9 +836,6 @@ void VulkanRenderer::update_mesh(const std::vector<Vertex>& vertices,
     vkUnmapMemory(device_, index_buffer_memory_);
 
     index_count_ = indices.size();
-
-    // 更新完顶点后，重新录制 command buffer（简单处理）
-    // record_command_buffers();
 }
 
 // =================== 命令缓冲 & draw ===================
@@ -797,6 +865,16 @@ void VulkanRenderer::record_command_buffers()
         vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_);
+
+        // Push MVP 给 vertex shader 的 push_constant
+        vkCmdPushConstants(
+            cmd,
+            pipeline_layout_,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(glm::mat4),
+            &mvp_
+        );
 
         VkBuffer vertexBuffers[] = { vertex_buffer_ };
         VkDeviceSize offsets[]   = { 0 };
@@ -883,32 +961,48 @@ uint32_t VulkanRenderer::find_memory_type(uint32_t type_filter, VkMemoryProperty
     throw std::runtime_error("failed to find suitable memory type");
 }
 
+void VulkanRenderer::cleanup_vertex_index_buffers()
+{
+    if (vertex_buffer_ != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, vertex_buffer_, nullptr);
+        vertex_buffer_ = VK_NULL_HANDLE;
+    }
+    if (vertex_buffer_memory_ != VK_NULL_HANDLE) {
+        vkFreeMemory(device_, vertex_buffer_memory_, nullptr);
+        vertex_buffer_memory_ = VK_NULL_HANDLE;
+    }
+    vertex_buffer_size_ = 0;
+
+    if (index_buffer_ != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, index_buffer_, nullptr);
+        index_buffer_ = VK_NULL_HANDLE;
+    }
+    if (index_buffer_memory_ != VK_NULL_HANDLE) {
+        vkFreeMemory(device_, index_buffer_memory_, nullptr);
+        index_buffer_memory_ = VK_NULL_HANDLE;
+    }
+    index_buffer_size_ = 0;
+    index_count_ = 0;
+}
+
 void VulkanRenderer::cleanup_swapchain()
 {
     for (auto fb : framebuffers_) {
-        vkDestroyFramebuffer(device_, fb, nullptr);
+        if (fb != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(device_, fb, nullptr);
+        }
     }
     framebuffers_.clear();
 
-    if (graphics_pipeline_) {
-        vkDestroyPipeline(device_, graphics_pipeline_, nullptr);
-        graphics_pipeline_ = VK_NULL_HANDLE;
-    }
-    if (pipeline_layout_) {
-        vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
-        pipeline_layout_ = VK_NULL_HANDLE;
-    }
-    if (render_pass_) {
-        vkDestroyRenderPass(device_, render_pass_, nullptr);
-        render_pass_ = VK_NULL_HANDLE;
-    }
-
     for (auto view : swapchain_image_views_) {
-        vkDestroyImageView(device_, view, nullptr);
+        if (view != VK_NULL_HANDLE) {
+            vkDestroyImageView(device_, view, nullptr);
+        }
     }
     swapchain_image_views_.clear();
+    swapchain_images_.clear();
 
-    if (swapchain_) {
+    if (swapchain_ != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(device_, swapchain_, nullptr);
         swapchain_ = VK_NULL_HANDLE;
     }
