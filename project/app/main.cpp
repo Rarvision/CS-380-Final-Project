@@ -225,13 +225,13 @@ int main()
     {
         // ========== 2. 构造布料场景 ==========
         ClothBuildParams params;
-        params.nx = 40;
-        params.ny = 40;
+        params.nx = 100;
+        params.ny = 50;
         params.spacing  = 0.03f;
         params.mass     = 0.02f;
-        params.k_struct = 5000.0f;
-        params.k_shear  = 2000.0f;
-        params.k_bend   = 2000.0f;
+        params.k_struct = 10000.0f;
+        params.k_shear  = 24000.0f;
+        params.k_bend   = 16000.0f;
         params.pin_top_edge = true;
 
         Scene scene;
@@ -241,7 +241,27 @@ int main()
         // ========== 3. 创建 CUDA 求解器 + 仿真器 ==========
         std::unique_ptr<IPhysicsSolver> solver = std::make_unique<CudaSolver>();
         Simulator sim(std::move(solver));
+
         sim.init_scene(scene);
+
+        // ========== 2. 构造碰撞体 ==========
+        CollisionScene coll;
+        coll.ground.y = -0.8f;  // 地板拉低
+
+        coll.box.enabled     = true;
+        coll.box.center      = Vec3(0.0f, coll.ground.y + coll.box.half_extent.y + 0.01f, 0.0f);
+        coll.box.half_extent = Vec3(0.4f, 0.4f, 0.4f);
+
+        sim.update_collision_scene(coll);
+        
+
+        // 将来你要球/圆锥，只需要在这里填 sphere/cone 的参数
+        // coll.sphere.enabled = false;
+        // coll.cone.enabled   = false;
+
+        // // 通过 IPhysicsSolver 接口传给 CUDA
+        // sim.update_collision_scene(coll);
+
 
         // ========== 4. 初始化 VulkanRenderer ==========
         VulkanRenderer renderer;
@@ -256,25 +276,27 @@ int main()
         std::vector<Vertex>  host_vertices;
         const auto& indices = scene.cloth.indices; // 索引在 CPU 侧固定不变
 
-        // 先做一小步仿真并填充一次 mesh，避免一开始 index_count=0 没东西画
-        sim.update_forces(scene.forces);
-        sim.step(1.0f / 120.0f);
-        sim.download_positions_normals(host_pos, host_normals);
+        // // 先做一小步仿真并填充一次 mesh，避免一开始 index_count=0 没东西画
+        // sim.update_forces(scene.forces);
+        // sim.step(1.0f / 120.0f);
+        // sim.download_positions_normals(host_pos, host_normals);
 
-        host_vertices.resize(host_pos.size());
-        for (size_t i = 0; i < host_pos.size(); ++i) {
-            host_vertices[i].pos = host_pos[i];
-            host_vertices[i].normal =
-                (i < host_normals.size()) ? host_normals[i] : Vec3(0, 1, 0);
-        }
-        renderer.update_mesh(host_vertices, indices);
+        // host_vertices.resize(host_pos.size());
+        // for (size_t i = 0; i < host_pos.size(); ++i) {
+        //     host_vertices[i].pos = host_pos[i];
+        //     host_vertices[i].normal =
+        //         (i < host_normals.size()) ? host_normals[i] : Vec3(0, 1, 0);
+        // }
+        // renderer.update_mesh(host_vertices, indices);
+        // renderer.update_box_mesh(coll.box.center, coll.box.half_extent);
+        // renderer.update_ground_mesh(coll.ground.y, 5.0f);
 
         // ========== 5. 主循环：固定物理时间步 + 每帧更新 mesh ==========
-        ExternalForces forces;
-        forces.gravity       = Vec3(0.0f, -10.0f, 0.0f);
-        forces.wind_dir      = Vec3(1.0f, 0.0f, 0.0f);
-        forces.wind_strength = 0.0f;   // 先不开风，之后可以用按键加风
-        forces.click_strength = 20.0f;
+        // ExternalForces forces{};
+        // forces.gravity       = Vec3(0.0f, -10.0f, 0.0f);
+        // forces.wind_dir      = Vec3(1.0f, 0.0f, 0.0f);
+        // forces.wind_strength = 0.0f;   // 先不开风，之后可以用按键加风
+        // forces.click_strength = 20.0f;
 
         const float FIXED_DT = 1.0f / 120.0f; // 物理固定步长
         double lastTime   = glfwGetTime();
@@ -289,6 +311,38 @@ int main()
 
         // Mouse click force
         bool last_mouse_down = false;
+
+        // warm up before entering loop
+        {
+            ExternalForces warm_forces{};
+            warm_forces.gravity       = Vec3(0.0f, -10.0f, 0.0f);
+            warm_forces.wind_dir      = Vec3(1.0f, 0.1f, 0.2f);
+            warm_forces.wind_strength = 50.0f;
+            // warm_forces.click_strength = 20.0f;
+
+            sim.update_forces(warm_forces);
+
+            const float WARM_DT   = 1.0f / 120.0f;
+            const int   WARM_STEPS = 120;
+            for (int i = 0; i < WARM_STEPS; ++i) {
+                sim.step(WARM_DT);
+            }
+
+            warm_forces.wind_strength = 0.0f;
+            sim.update_forces(warm_forces);
+
+            sim.download_positions_normals(host_pos, host_normals);
+            host_vertices.resize(host_pos.size());
+            for (size_t i = 0; i < host_pos.size(); ++i) {
+                host_vertices[i].pos = host_pos[i];
+                host_vertices[i].normal =
+                    (i < host_normals.size()) ? host_normals[i] : Vec3(0, 1, 0);
+            }
+
+            renderer.update_mesh(host_vertices, indices);
+            renderer.update_box_mesh(coll.box.center, coll.box.half_extent);
+            renderer.update_ground_mesh(coll.ground.y, 5.0f);
+        }
 
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
@@ -309,17 +363,34 @@ int main()
             }
             f_down_prev = f_down;
 
+            // box control
+            const float cube_speed = 1.5f;
+            float move = cube_speed * dt;
+
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+                coll.box.center.z += move;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+                coll.box.center.z -= move;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+                coll.box.center.x -= move;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+                coll.box.center.x += move;
+
+            coll.box.center.y = coll.ground.y + coll.box.half_extent.y;
+            coll.box.center.x = glm::clamp(coll.box.center.x, -4.0f, 4.0f);
+            coll.box.center.z = glm::clamp(coll.box.center.z, -4.0f, 4.0f);
+
+            sim.update_collision_scene(coll);
+            renderer.update_box_mesh(coll.box.center, coll.box.half_extent);
+
             // ---- 更新风参数（带扰动）----
-            wind_cfg.enabled = wind_on;
-            update_wind(wind_cfg, wind_state, dt, forces);
+            // wind_cfg.enabled = wind_on;
+            // update_wind(wind_cfg, wind_state, dt, forces);
 
             // ---- 鼠标左键单击 → 一次性冲量 ----
             bool mouse_down = (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
             bool mouse_clicked = (mouse_down && !last_mouse_down);
             last_mouse_down = mouse_down;
-
-            // 默认本帧没有点击冲量
-            // forces.has_click_impulse = false;
 
             if (mouse_clicked && !host_pos.empty()) {
                 // 用 Ray 做 picking（用上一帧的 host_pos）
@@ -333,18 +404,22 @@ int main()
                     hit_index, hit_point);
 
                 if (has_hit) {
-                    // std::cout << "Click impulse at vertex "
-                    //           << hit_index << " : ("
-                    //           << hit_point.x << ", "
-                    //           << hit_point.y << ", "
-                    //           << hit_point.z << ")\n";
-
                     // ⭐ 直接对 CUDA 解算器施加一次“拍一下”的冲量
                     float radius   = 0.15f;   // 影响范围
                     float strength = 30.0f;   // 力度先设大一点，方便看效果
                     sim.apply_click_impulse(hit_point, radius, strength);
                 }
             }
+
+            ExternalForces forces{};
+            forces.gravity       = Vec3(0.0f, -10.0f, 0.0f);
+            forces.wind_dir      = Vec3(1.0f, 0.0f, 0.0f);
+            forces.wind_strength = 0.0f; 
+            forces.click_strength = 20.0f;
+
+            wind_cfg.enabled = wind_on;
+            update_wind(wind_cfg, wind_state, dt, forces);
+
 
             // ---- 固定步长物理子步 ----
             while (accumulator >= FIXED_DT) {
@@ -353,7 +428,7 @@ int main()
                 accumulator -= FIXED_DT;
 
                 // 如果你希望点击只作用一个子步，可以在这里关掉：
-                // forces.has_click_impulse = false;
+                // forces.has_click_impulse = true;
             }
 
             // ---- 从 CUDA 回读位置 + 法线 ----

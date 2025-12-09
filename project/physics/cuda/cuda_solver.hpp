@@ -23,12 +23,13 @@ public:
     void apply_click_impulse(const Vec3& pos_ws,
                              f32 radius,
                              f32 strength) override;
+    void update_collision_scene(const CollisionScene& scene) override;
 
 private:
     CudaClothDevice dev_{};
-    f32 damping_{0.02f};
-    f32 ground_y_{-1.0f};
-    float time_ = 0.0f;
+    CollisionScene  collision_;
+    float damping_;
+    float time_;
 
     void substep(f32 dt, const ExternalForces& f);
 };

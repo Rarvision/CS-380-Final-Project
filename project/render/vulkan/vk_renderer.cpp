@@ -15,6 +15,10 @@
 #include <glm/ext/matrix_transform.hpp>
 
 // =================== 辅助结构 ===================
+struct PushConstants {
+    glm::mat4 mvp;
+    glm::vec4 color;
+};
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphics_family;
@@ -207,6 +211,7 @@ bool VulkanRenderer::init(GLFWwindow* window, uint32_t width, uint32_t height)
     if (!create_logical_device())  return false;
     if (!create_swapchain())       return false;
     if (!create_image_views())     return false;
+    if (!create_depth_resources()) return false;
     if (!create_render_pass())     return false;
     if (!create_graphics_pipeline()) return false;
     if (!create_framebuffers())    return false;
@@ -474,19 +479,36 @@ bool VulkanRenderer::create_render_pass()
     color.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
     color.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
+    VkAttachmentDescription depth{};
+    depth.format         = depth_format_;
+    depth.samples        = VK_SAMPLE_COUNT_1_BIT;
+    depth.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    depth.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription attachments[2] = { color, depth };
+
     VkAttachmentReference colorRef{};
     colorRef.attachment = 0;
     colorRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 1;
+    depthRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
     VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments    = &colorRef;
+    subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount    = 1;
+    subpass.pColorAttachments       = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
 
     VkRenderPassCreateInfo rp{};
     rp.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rp.attachmentCount = 1;
-    rp.pAttachments    = &color;
+    rp.attachmentCount = 2;
+    rp.pAttachments    = attachments;
     rp.subpassCount    = 1;
     rp.pSubpasses      = &subpass;
 
@@ -600,7 +622,7 @@ bool VulkanRenderer::create_graphics_pipeline()
     // layoutInfo.pushConstantRangeCount = 0;
 
     VkPushConstantRange pcRange{};
-    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcRange.offset     = 0;
     pcRange.size       = sizeof(glm::mat4);
 
@@ -616,6 +638,14 @@ bool VulkanRenderer::create_graphics_pipeline()
         return false;
     }
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable       = VK_TRUE;
+    depthStencil.depthWriteEnable      = VK_TRUE;
+    depthStencil.depthCompareOp        = VK_COMPARE_OP_LESS;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable     = VK_FALSE;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.stageCount          = 2;
@@ -625,7 +655,7 @@ bool VulkanRenderer::create_graphics_pipeline()
     pipelineInfo.pViewportState      = &viewportState;
     pipelineInfo.pRasterizationState = &raster;
     pipelineInfo.pMultisampleState   = &multisample;
-    pipelineInfo.pDepthStencilState  = nullptr;
+    pipelineInfo.pDepthStencilState  = &depthStencil;
     pipelineInfo.pColorBlendState    = &colorBlend;
     pipelineInfo.layout              = pipeline_layout_;
     pipelineInfo.renderPass          = render_pass_;
@@ -646,12 +676,12 @@ bool VulkanRenderer::create_framebuffers()
     framebuffers_.resize(swapchain_image_views_.size());
 
     for (size_t i = 0; i < swapchain_image_views_.size(); ++i) {
-        VkImageView attachments[] = { swapchain_image_views_[i] };
+        VkImageView attachments[] = { swapchain_image_views_[i], depth_image_view_ };
 
         VkFramebufferCreateInfo info{};
         info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         info.renderPass      = render_pass_;
-        info.attachmentCount = 1;
+        info.attachmentCount = 2;
         info.pAttachments    = attachments;
         info.width           = swapchain_extent_.width;
         info.height          = swapchain_extent_.height;
@@ -789,6 +819,67 @@ bool VulkanRenderer::create_index_buffer(size_t size_bytes)
     return true;
 }
 
+bool VulkanRenderer::create_depth_resources()
+{
+    depth_format_ = VK_FORMAT_D32_SFLOAT; // 简化版，直接用这个
+
+    VkImageCreateInfo img{};
+    img.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    img.imageType = VK_IMAGE_TYPE_2D;
+    img.extent.width  = swapchain_extent_.width;
+    img.extent.height = swapchain_extent_.height;
+    img.extent.depth  = 1;
+    img.mipLevels     = 1;
+    img.arrayLayers   = 1;
+    img.format        = depth_format_;
+    img.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    img.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    img.samples       = VK_SAMPLE_COUNT_1_BIT;
+    img.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(device_, &img, nullptr, &depth_image_) != VK_SUCCESS) {
+        std::cerr << "Failed to create depth image\n";
+        return false;
+    }
+
+    VkMemoryRequirements memReq;
+    vkGetImageMemoryRequirements(device_, depth_image_, &memReq);
+
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize  = memReq.size;
+    alloc.memoryTypeIndex = find_memory_type(
+        memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(device_, &alloc, nullptr, &depth_image_memory_) != VK_SUCCESS) {
+        std::cerr << "Failed to allocate depth image memory\n";
+        return false;
+    }
+
+    vkBindImageMemory(device_, depth_image_, depth_image_memory_, 0);
+
+    // 创建 image view
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image    = depth_image_;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format   = depth_format_;
+    viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.baseMipLevel   = 0;
+    viewInfo.subresourceRange.levelCount     = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount     = 1;
+
+    if (vkCreateImageView(device_, &viewInfo, nullptr, &depth_image_view_) != VK_SUCCESS) {
+        std::cerr << "Failed to create depth image view\n";
+        return false;
+    }
+
+    return true;
+}
+
 
 void VulkanRenderer::update_mesh(const std::vector<Vertex>& vertices,
                                  const std::vector<u32>& indices)
@@ -838,6 +929,277 @@ void VulkanRenderer::update_mesh(const std::vector<Vertex>& vertices,
     index_count_ = indices.size();
 }
 
+void VulkanRenderer::update_box_mesh(const Vec3& center, const Vec3& half_extent)
+{
+    // 1. 构建 8 个顶点（世界空间位置）
+    std::vector<Vertex> verts(8);
+    const float cx = center.x, cy = center.y, cz = center.z;
+    const float hx = half_extent.x, hy = half_extent.y, hz = half_extent.z;
+
+    // front (z -)
+    verts[0].pos = Vec3(cx - hx, cy - hy, cz - hz);
+    verts[1].pos = Vec3(cx + hx, cy - hy, cz - hz);
+    verts[2].pos = Vec3(cx + hx, cy + hy, cz - hz);
+    verts[3].pos = Vec3(cx - hx, cy + hy, cz - hz);
+    // back (z +)
+    verts[4].pos = Vec3(cx - hx, cy - hy, cz + hz);
+    verts[5].pos = Vec3(cx + hx, cy - hy, cz + hz);
+    verts[6].pos = Vec3(cx + hx, cy + hy, cz + hz);
+    verts[7].pos = Vec3(cx - hx, cy + hy, cz + hz);
+
+    // 法线先清零，下面按三角面累加
+    for (auto& v : verts) {
+        v.normal = Vec3(0.0f);
+    }
+
+    // 2. 12 个三角（36 indices）
+    std::vector<u32> indices = {
+        // front (-Z)
+        0, 1, 2,  2, 3, 0,
+        // back (+Z)
+        5, 4, 7,  7, 6, 5,
+        // left (-X)
+        4, 0, 3,  3, 7, 4,
+        // right (+X)
+        1, 5, 6,  6, 2, 1,
+        // bottom (-Y)
+        4, 5, 1,  1, 0, 4,
+        // top (+Y)
+        3, 2, 6,  6, 7, 3
+    };
+
+    // 3. 用三角面累加 vertex normal
+    for (size_t i = 0; i < indices.size(); i += 3) {
+        u32 i0 = indices[i + 0];
+        u32 i1 = indices[i + 1];
+        u32 i2 = indices[i + 2];
+
+        Vec3 p0 = verts[i0].pos;
+        Vec3 p1 = verts[i1].pos;
+        Vec3 p2 = verts[i2].pos;
+
+        Vec3 e1 = p1 - p0;
+        Vec3 e2 = p2 - p0;
+        Vec3 n  = glm::cross(e1, e2);
+
+        verts[i0].normal += n;
+        verts[i1].normal += n;
+        verts[i2].normal += n;
+    }
+    for (auto& v : verts) {
+        float len = glm::length(v.normal);
+        if (len > 1e-6f) v.normal /= len;
+        else             v.normal = Vec3(0, 1, 0);
+    }
+
+    // 4. 确保有足够大的 cube vertex/index buffer（host-visible）
+    VkDeviceSize vbytes = sizeof(Vertex) * verts.size();
+    VkDeviceSize ibytes = sizeof(u32)    * indices.size();
+
+    // --- 顶点缓冲 ---
+    if (cube_vertex_buffer_ == VK_NULL_HANDLE || vbytes > cube_vertex_buffer_size_) {
+        if (cube_vertex_buffer_ != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device_, cube_vertex_buffer_, nullptr);
+            vkFreeMemory(device_, cube_vertex_memory_, nullptr);
+            cube_vertex_buffer_ = VK_NULL_HANDLE;
+            cube_vertex_memory_ = VK_NULL_HANDLE;
+            cube_vertex_buffer_size_ = 0;
+        }
+
+        cube_vertex_buffer_size_ = vbytes;
+
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size  = vbytes;
+        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(device_, &bufferInfo, nullptr, &cube_vertex_buffer_) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create cube vertex buffer");
+        }
+
+        VkMemoryRequirements memReq;
+        vkGetBufferMemoryRequirements(device_, cube_vertex_buffer_, &memReq);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize  = memReq.size;
+        allocInfo.memoryTypeIndex = find_memory_type(
+            memReq.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if (vkAllocateMemory(device_, &allocInfo, nullptr, &cube_vertex_memory_) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate cube vertex buffer memory");
+        }
+
+        vkBindBufferMemory(device_, cube_vertex_buffer_, cube_vertex_memory_, 0);
+    }
+
+    // --- 索引缓冲 ---
+    if (cube_index_buffer_ == VK_NULL_HANDLE || ibytes > cube_index_count_ * sizeof(u32)) {
+        if (cube_index_buffer_ != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device_, cube_index_buffer_, nullptr);
+            vkFreeMemory(device_, cube_index_memory_, nullptr);
+            cube_index_buffer_ = VK_NULL_HANDLE;
+            cube_index_memory_ = VK_NULL_HANDLE;
+            cube_index_count_  = 0;
+        }
+
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size  = ibytes;
+        bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(device_, &bufferInfo, nullptr, &cube_index_buffer_) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create cube index buffer");
+        }
+
+        VkMemoryRequirements memReq;
+        vkGetBufferMemoryRequirements(device_, cube_index_buffer_, &memReq);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize  = memReq.size;
+        allocInfo.memoryTypeIndex = find_memory_type(
+            memReq.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if (vkAllocateMemory(device_, &allocInfo, nullptr, &cube_index_memory_) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate cube index buffer memory");
+        }
+
+        vkBindBufferMemory(device_, cube_index_buffer_, cube_index_memory_, 0);
+    }
+
+    // 5. 拷贝数据 host → device（因为是 HOST_VISIBLE，就直接 memcpy）
+    void* data = nullptr;
+    // vertex
+    vkMapMemory(device_, cube_vertex_memory_, 0, vbytes, 0, &data);
+    std::memcpy(data, verts.data(), vbytes);
+    vkUnmapMemory(device_, cube_vertex_memory_);
+
+    // index
+    vkMapMemory(device_, cube_index_memory_, 0, ibytes, 0, &data);
+    std::memcpy(data, indices.data(), ibytes);
+    vkUnmapMemory(device_, cube_index_memory_);
+
+    cube_index_count_ = static_cast<u32>(indices.size());
+}
+
+void VulkanRenderer::update_ground_mesh(float y, float half_extent)
+{
+    // 做一个大方形地板：[-h, h] x [-h, h]，位于 y 高度
+    std::vector<Vertex> verts(4);
+    float h = half_extent;
+
+    verts[0].pos = Vec3(-h, y, -h);
+    verts[1].pos = Vec3( h, y, -h);
+    verts[2].pos = Vec3( h, y,  h);
+    verts[3].pos = Vec3(-h, y,  h);
+
+    // 地面法线向上
+    for (auto& v : verts) {
+        v.normal = Vec3(0.0f, 1.0f, 0.0f);
+    }
+
+    std::vector<u32> indices = {
+        0, 1, 2,
+        2, 3, 0
+    };
+
+    VkDeviceSize vbytes = sizeof(Vertex) * verts.size();
+    VkDeviceSize ibytes = sizeof(u32)    * indices.size();
+
+    // --- 顶点缓冲 ---
+    if (ground_vertex_buffer_ == VK_NULL_HANDLE || vbytes > ground_vertex_buffer_size_) {
+        if (ground_vertex_buffer_ != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device_, ground_vertex_buffer_, nullptr);
+            vkFreeMemory(device_, ground_vertex_memory_, nullptr);
+            ground_vertex_buffer_ = VK_NULL_HANDLE;
+            ground_vertex_memory_ = VK_NULL_HANDLE;
+            ground_vertex_buffer_size_ = 0;
+        }
+
+        ground_vertex_buffer_size_ = vbytes;
+
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size  = vbytes;
+        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(device_, &bufferInfo, nullptr, &ground_vertex_buffer_) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create ground vertex buffer");
+        }
+
+        VkMemoryRequirements memReq;
+        vkGetBufferMemoryRequirements(device_, ground_vertex_buffer_, &memReq);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize  = memReq.size;
+        allocInfo.memoryTypeIndex = find_memory_type(
+            memReq.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if (vkAllocateMemory(device_, &allocInfo, nullptr, &ground_vertex_memory_) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate ground vertex buffer memory");
+        }
+
+        vkBindBufferMemory(device_, ground_vertex_buffer_, ground_vertex_memory_, 0);
+    }
+
+    // --- 索引缓冲 ---
+    if (ground_index_buffer_ == VK_NULL_HANDLE || ibytes > ground_index_count_ * sizeof(u32)) {
+        if (ground_index_buffer_ != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device_, ground_index_buffer_, nullptr);
+            vkFreeMemory(device_, ground_index_memory_, nullptr);
+            ground_index_buffer_ = VK_NULL_HANDLE;
+            ground_index_memory_ = VK_NULL_HANDLE;
+            ground_index_count_  = 0;
+        }
+
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size  = ibytes;
+        bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(device_, &bufferInfo, nullptr, &ground_index_buffer_) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create ground index buffer");
+        }
+
+        VkMemoryRequirements memReq;
+        vkGetBufferMemoryRequirements(device_, ground_index_buffer_, &memReq);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize  = memReq.size;
+        allocInfo.memoryTypeIndex = find_memory_type(
+            memReq.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if (vkAllocateMemory(device_, &allocInfo, nullptr, &ground_index_memory_) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate ground index buffer memory");
+        }
+
+        vkBindBufferMemory(device_, ground_index_buffer_, ground_index_memory_, 0);
+    }
+
+    // 拷贝数据
+    void* data = nullptr;
+    vkMapMemory(device_, ground_vertex_memory_, 0, vbytes, 0, &data);
+    std::memcpy(data, verts.data(), vbytes);
+    vkUnmapMemory(device_, ground_vertex_memory_);
+
+    vkMapMemory(device_, ground_index_memory_, 0, ibytes, 0, &data);
+    std::memcpy(data, indices.data(), ibytes);
+    vkUnmapMemory(device_, ground_index_memory_);
+
+    ground_index_count_ = static_cast<u32>(indices.size());
+}
+
 // =================== 命令缓冲 & draw ===================
 
 void VulkanRenderer::record_command_buffers()
@@ -845,11 +1207,17 @@ void VulkanRenderer::record_command_buffers()
     for (size_t i = 0; i < command_buffers_.size(); ++i) {
         VkCommandBuffer cmd = command_buffers_[i];
 
+        // 开始录制 command buffer
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = 0;
+        beginInfo.pInheritanceInfo = nullptr;
 
-        vkBeginCommandBuffer(cmd, &beginInfo);
+        if (vkBeginCommandBuffer(cmd, &beginInfo) != VK_SUCCESS) {
+            throw std::runtime_error("failed to begin recording command buffer");
+        }
 
+        // 设置 render pass begin
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpBegin.renderPass  = render_pass_;
@@ -857,39 +1225,136 @@ void VulkanRenderer::record_command_buffers()
         rpBegin.renderArea.offset = {0, 0};
         rpBegin.renderArea.extent = swapchain_extent_;
 
-        VkClearValue clearColor{};
-        clearColor.color = {{0.02f, 0.02f, 0.05f, 1.0f}};
-        rpBegin.clearValueCount = 1;
-        rpBegin.pClearValues    = &clearColor;
+        // 清颜色 + 深度
+        VkClearValue clearValues[2];
+        clearValues[0].color        = {{0.02f, 0.02f, 0.05f, 1.0f}};  // 背景色
+        clearValues[1].depthStencil = {1.0f, 0};                       // 深度=1.0
+
+        rpBegin.clearValueCount = 2;
+        rpBegin.pClearValues    = clearValues;
 
         vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
+        // 绑定图形管线
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_);
 
-        // Push MVP 给 vertex shader 的 push_constant
-        vkCmdPushConstants(
-            cmd,
-            pipeline_layout_,
-            VK_SHADER_STAGE_VERTEX_BIT,
-            0,
-            sizeof(glm::mat4),
-            &mvp_
-        );
+        // Push 常量结构：MVP + 颜色
+        PushConstants pc{};
+        pc.mvp = mvp_;
 
-        VkBuffer vertexBuffers[] = { vertex_buffer_ };
-        VkDeviceSize offsets[]   = { 0 };
-        vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+        // ===== 1) 画地面 =====
+        if (ground_index_count_ > 0) {
+            pc.color = glm::vec4(0.20f, 0.25f, 0.20f, 1.0f);  // 偏绿色地板
 
-        vkCmdBindIndexBuffer(cmd, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdPushConstants(
+                cmd,
+                pipeline_layout_,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0,
+                sizeof(PushConstants),
+                &pc
+            );
 
-        if (index_count_ > 0) {
-            vkCmdDrawIndexed(cmd, static_cast<uint32_t>(index_count_), 1, 0, 0, 0);
+            VkBuffer vb[]       = { ground_vertex_buffer_ };
+            VkDeviceSize offs[] = { 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 1, vb, offs);
+            vkCmdBindIndexBuffer(cmd, ground_index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, ground_index_count_, 1, 0, 0, 0);
         }
 
+        // ===== 2) 画方块 =====
+        if (cube_index_count_ > 0) {
+            pc.color = glm::vec4(0.85f, 0.35f, 0.10f, 1.0f);  // 比较亮的橙红色方块
+
+            vkCmdPushConstants(
+                cmd,
+                pipeline_layout_,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0,
+                sizeof(PushConstants),
+                &pc
+            );
+
+            VkBuffer vb[]       = { cube_vertex_buffer_ };
+            VkDeviceSize offs[] = { 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 1, vb, offs);
+            vkCmdBindIndexBuffer(cmd, cube_index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, cube_index_count_, 1, 0, 0, 0);
+        }
+
+        // ===== 3) 画布 =====
+        if (index_count_ > 0) {
+            pc.color = glm::vec4(0.40f, 0.40f, 0.90f, 1.0f);  // 布：偏蓝一点
+
+            vkCmdPushConstants(
+                cmd,
+                pipeline_layout_,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0,
+                sizeof(PushConstants),
+                &pc
+            );
+
+            VkBuffer vb[]       = { vertex_buffer_ };
+            VkDeviceSize offs[] = { 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 1, vb, offs);
+            vkCmdBindIndexBuffer(cmd, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+
+            vkCmdDrawIndexed(
+                cmd,
+                static_cast<uint32_t>(index_count_),
+                1,
+                0, 0, 0
+            );
+        }
+
+        // 结束 render pass
         vkCmdEndRenderPass(cmd);
-        vkEndCommandBuffer(cmd);
+
+        // 结束 command buffer 录制
+        if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
+            throw std::runtime_error("failed to record command buffer");
+        }
     }
 }
+
+        // // Push MVP 给 vertex shader 的 push_constant
+        // vkCmdPushConstants(
+        //     cmd,
+        //     pipeline_layout_,
+        //     VK_SHADER_STAGE_VERTEX_BIT,
+        //     0,
+        //     sizeof(glm::mat4),
+        //     &mvp_
+        // );
+
+        // // 1) 地面
+        // if (ground_index_count_ > 0) {
+        //     VkBuffer vb[] = { ground_vertex_buffer_ };
+        //     VkDeviceSize offs[] = { 0 };
+        //     vkCmdBindVertexBuffers(cmd, 0, 1, vb, offs);
+        //     vkCmdBindIndexBuffer(cmd, ground_index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+        //     vkCmdDrawIndexed(cmd, ground_index_count_, 1, 0, 0, 0);
+        // }
+
+        // // 2) 方块
+        // if (cube_index_count_ > 0) {
+        //     VkBuffer vb[] = { cube_vertex_buffer_ };
+        //     VkDeviceSize offs[] = { 0 };
+        //     vkCmdBindVertexBuffers(cmd, 0, 1, vb, offs);
+        //     vkCmdBindIndexBuffer(cmd, cube_index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+        //     vkCmdDrawIndexed(cmd, cube_index_count_, 1, 0, 0, 0);
+        // }
+
+        // VkBuffer vertexBuffers[] = { vertex_buffer_ };
+        // VkDeviceSize offsets[]   = { 0 };
+        // vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+
+        // vkCmdBindIndexBuffer(cmd, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+
+        // if (index_count_ > 0) {
+        //     vkCmdDrawIndexed(cmd, static_cast<uint32_t>(index_count_), 1, 0, 0, 0);
+        // }
 
 void VulkanRenderer::draw_frame()
 {
@@ -1001,6 +1466,19 @@ void VulkanRenderer::cleanup_swapchain()
     }
     swapchain_image_views_.clear();
     swapchain_images_.clear();
+
+    if (depth_image_view_ != VK_NULL_HANDLE) {
+        vkDestroyImageView(device_, depth_image_view_, nullptr);
+        depth_image_view_ = VK_NULL_HANDLE;
+    }
+    if (depth_image_ != VK_NULL_HANDLE) {
+        vkDestroyImage(device_, depth_image_, nullptr);
+        depth_image_ = VK_NULL_HANDLE;
+    }
+    if (depth_image_memory_ != VK_NULL_HANDLE) {
+        vkFreeMemory(device_, depth_image_memory_, nullptr);
+        depth_image_memory_ = VK_NULL_HANDLE;
+    }
 
     if (swapchain_ != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(device_, swapchain_, nullptr);

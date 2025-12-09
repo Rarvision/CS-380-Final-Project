@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
+static constexpr u32 kPinOffsetX = 2;
+static constexpr u32 kPinOffsetY = 1;
+
 ClothModel build_regular_grid(const ClothBuildParams& p)
 {
     ClothModel c;
@@ -53,7 +56,6 @@ ClothModel build_regular_grid(const ClothBuildParams& p)
     }
     compute_springs(c, p.k_struct, p.k_shear, p.k_bend);
 
-    // 简单 AABB
     c.aabb.min = c.aabb.max = c.positions[0];
     for (auto& v : c.positions) {
         c.aabb.min = glm::min(c.aabb.min, v);
@@ -65,12 +67,28 @@ ClothModel build_regular_grid(const ClothBuildParams& p)
 
 void tag_pins_top_edge(ClothModel& c)
 {
-    // “顶边”：y = ny - 1 行
-    for (u32 x = 0; x < c.nx; ++x) {
-        u32 idx = 0 * c.nx + x;
-        c.fixed[idx] = 1u;
+    std::fill(c.fixed.begin(), c.fixed.end(), 0u);
+
+    if (c.nx == 0 || c.ny == 0) return;
+
+    const u32 y_max = c.ny - 1;
+
+    u32 y_pin;
+    if (kPinOffsetY >= c.ny) {
+        y_pin = 0;
+    } else {
+        y_pin = y_max - kPinOffsetY;
     }
+
+    u32 left_x  = std::min(kPinOffsetX, c.nx - 1);
+    u32 right_x = (c.nx - 1 > kPinOffsetX)
+                  ? (c.nx - 1 - kPinOffsetX)
+                  : (c.nx - 1);
+
+    c.fixed[y_pin * c.nx + left_x]  = 1u;
+    c.fixed[y_pin * c.nx + right_x] = 1u;
 }
+
 
 static void add_spring(ClothModel& c, u32 i, u32 j, f32 k)
 {

@@ -240,12 +240,74 @@ __global__ void kernel_collide_plane(float3* pos, float3* vel, u32 n, float grou
     u32 idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
 
+    const float separation = 0.001f;
+
     float3 p = pos[idx];
-    if (p.y < ground_y) {
-        p.y = ground_y;
+    if (p.y < ground_y + separation) {
+        p.y = ground_y + separation;
         vel[idx].y = 0.0f;
         pos[idx] = p;
     }
+}
+
+__global__ void kernel_collide_box(
+    float3* pos, float3* vel, u32 n,
+    float3 center, float3 half_extent)
+{
+    u32 idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+
+    const float separation = 0.002f;
+
+    float3 p = pos[idx];
+    float3 v = vel[idx];
+
+    float3 local = f3_sub(p, center);
+
+    // 不在 box 内部就不管
+    if (fabsf(local.x) > half_extent.x ||
+        fabsf(local.y) > half_extent.y ||
+        fabsf(local.z) > half_extent.z) {
+        return;
+    }
+
+    // 记录修正前的位置
+    float3 local_before = local;
+
+    float dx = half_extent.x - fabsf(local.x);
+    float dy = half_extent.y - fabsf(local.y);
+    float dz = half_extent.z - fabsf(local.z);
+
+    // 选最小穿透方向
+    if (dx <= dy && dx <= dz) {
+        float sx = (local.x >= 0.0f) ? 1.0f : -1.0f;
+        local.x = sx * (half_extent.x + separation);
+        // 只衰减一下法向速度，而不是归零
+        v.x *= 0.2f;
+    } else if (dy <= dx && dy <= dz) {
+        float sy = (local.y >= 0.0f) ? 1.0f : -1.0f;
+        local.y = sy * (half_extent.y + separation);
+        v.y *= 0.2f;
+    } else {
+        float sz = (local.z >= 0.0f) ? 1.0f : -1.0f;
+        local.z = sz * (half_extent.z + separation);
+        v.z *= 0.2f;
+    }
+
+    // === 新加：限制单次修正位移的最大长度 ===
+    float3 corr = f3_sub(local, local_before);
+    float  corr_len = f3_len(corr);
+    const float max_corr = 0.05f;  // 每帧最多移动 5cm（根据你的单位）
+
+    if (corr_len > max_corr && corr_len > 1e-6f) {
+        float scale = max_corr / corr_len;
+        corr = f3_scale(corr, scale);
+        local = f3_add(local_before, corr);
+    }
+
+    p = f3_add(center, local);
+    pos[idx] = p;
+    vel[idx] = v;
 }
 
 __global__ void kernel_clear_normals(float3* normal, u32 n)
@@ -299,6 +361,7 @@ CudaSolver::CudaSolver()
     d_force.d_ptr = nullptr;
     d_force.bytes = 0;
     time_ = 0.0f;
+    damping_ = 0.03f;
 }
 
 CudaSolver::~CudaSolver()
@@ -353,6 +416,19 @@ void CudaSolver::upload(const ClothModel& model)
         springs_dev[i] = { s.i, s.j, s.rest, s.k };
     }
     upload_vector<SpringDev>(dev_.springs, springs_dev);
+
+    const size_t n = dev_.n_vertices;
+    if (n > 0) {
+        // 1) 初始速度全 0
+        cudaMemset(dev_.vel.d_ptr,    0, n * sizeof(float3));
+        // 2) 初始法线全 0（第一步 kernel_clear_normals + accumulate_normals 会再算一次）
+        cudaMemset(dev_.normal.d_ptr, 0, n * sizeof(float3));
+        // 3) 力缓存全 0
+        cudaMemset(d_force.d_ptr,     0, n * sizeof(float3));
+    }
+
+    time_ = 0.0f; // 重新开始计时
+
 }
 
 void CudaSolver::apply_click_impulse(const Vec3& pos_ws,
@@ -370,6 +446,11 @@ void CudaSolver::apply_click_impulse(const Vec3& pos_ws,
     float3 cpos = make_f3(pos_ws);
     kernel_click_impulse<<<gridVerts, blockSize>>>(
         d_pos, d_vel, dev_.n_vertices, cpos, strength, radius);
+}
+
+void CudaSolver::update_collision_scene(const CollisionScene& scene)
+{
+    collision_ = scene;
 }
 
 void CudaSolver::substep(f32 dt, const ExternalForces& f)
@@ -417,7 +498,19 @@ void CudaSolver::substep(f32 dt, const ExternalForces& f)
         d_pos, d_vel, d_f, d_fixed, nVerts, inv_mass, dt, g, damping_);
 
     // 5. 碰撞
-    kernel_collide_plane<<<gridVerts, blockSize>>>(d_pos, d_vel, nVerts, ground_y_);
+    kernel_collide_plane<<<gridVerts, blockSize>>>(
+        d_pos, d_vel, nVerts, collision_.ground.y);
+
+    if (collision_.box.enabled) {
+        float3 box_center  = make_float3(collision_.box.center.x,
+                                        collision_.box.center.y,
+                                        collision_.box.center.z);
+        float3 box_halfext = make_float3(collision_.box.half_extent.x,
+                                        collision_.box.half_extent.y,
+                                        collision_.box.half_extent.z);
+        kernel_collide_box<<<gridVerts, blockSize>>>(
+            d_pos, d_vel, nVerts, box_center, box_halfext);
+    }
 
     // 6. 法线
     kernel_clear_normals<<<gridVerts, blockSize>>>(d_norm, nVerts);
@@ -440,7 +533,7 @@ void CudaSolver::substep(f32 dt, const ExternalForces& f)
 
 void CudaSolver::step(f32 dt, const ExternalForces& f)
 {
-    const int substeps = 2;
+    const int substeps = 4;
     f32 h = dt / substeps;
     for (int i = 0; i < substeps; ++i) {
         substep(h, f);

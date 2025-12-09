@@ -20,6 +20,8 @@ public:
     bool init(GLFWwindow* window, uint32_t width, uint32_t height);
     void update_mesh(const std::vector<Vertex>& vertices,
                      const std::vector<u32>& indices);
+    void update_box_mesh(const Vec3& center, const Vec3& half_extent);
+    void update_ground_mesh(float y, float half_extent);
     void draw_frame();
     void wait_idle();
 
@@ -66,6 +68,30 @@ private:
 
     size_t index_buffer_size_{0};
 
+    // depth buffer
+    VkImage        depth_image_{VK_NULL_HANDLE};
+    VkDeviceMemory depth_image_memory_{VK_NULL_HANDLE};
+    VkImageView    depth_image_view_{VK_NULL_HANDLE};
+    VkFormat       depth_format_{VK_FORMAT_D32_SFLOAT};
+
+    // cube buffer
+    VkBuffer       cube_vertex_buffer_{VK_NULL_HANDLE};
+    VkDeviceMemory cube_vertex_memory_{VK_NULL_HANDLE};
+    VkDeviceSize   cube_vertex_buffer_size_{0};
+
+    VkBuffer       cube_index_buffer_{VK_NULL_HANDLE};
+    VkDeviceMemory cube_index_memory_{VK_NULL_HANDLE};
+    u32            cube_index_count_{0};
+
+    // ground buffer
+    VkBuffer       ground_vertex_buffer_{VK_NULL_HANDLE};
+    VkDeviceMemory ground_vertex_memory_{VK_NULL_HANDLE};
+    VkDeviceSize   ground_vertex_buffer_size_{0};
+
+    VkBuffer       ground_index_buffer_{VK_NULL_HANDLE};
+    VkDeviceMemory ground_index_memory_{VK_NULL_HANDLE};
+    u32            ground_index_count_{0};
+
     //
     bool           cb_recorded_{false};
 
@@ -82,6 +108,7 @@ private:
     bool create_logical_device();
     bool create_swapchain();
     bool create_image_views();
+    bool create_depth_resources();
     bool create_render_pass();
     bool create_graphics_pipeline();
     bool create_framebuffers();

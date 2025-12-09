@@ -52,10 +52,16 @@ public:
         if (solver_) {
             solver_->apply_click_impulse(pos_ws, radius, strength);
         }
-    }   
+    }
+
+    void update_collision_scene(const CollisionScene& c) {
+        collision_ = c;
+        solver_->update_collision_scene(collision_);
+    }
 
 private:
     std::unique_ptr<IPhysicsSolver> solver_;
     Scene scene_;
+    CollisionScene collision_;
     u32   n_indices_{0};
 };

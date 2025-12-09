@@ -3,6 +3,7 @@
 
 #include "../core/common/types.hpp"
 #include "../core/cloth/cloth_model.hpp"
+#include "../core/colliders/colliders.hpp"
 
 struct ExternalForces {
     Vec3 gravity{0.0f, -9.81f, 0.0f};
@@ -41,4 +42,6 @@ public:
         (void)radius;
         (void)strength;
     }
+
+    virtual void update_collision_scene(const CollisionScene& scene) = 0;
 };
