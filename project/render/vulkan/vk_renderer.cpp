@@ -597,12 +597,21 @@ bool VulkanRenderer::create_graphics_pipeline()
     raster.lineWidth               = 1.0f;
     raster.cullMode                = VK_CULL_MODE_NONE;
     raster.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    raster.depthBiasEnable         = VK_FALSE;
+    raster.depthBiasEnable         = VK_TRUE;
 
     VkPipelineMultisampleStateCreateInfo multisample{};
     multisample.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     multisample.sampleShadingEnable  = VK_FALSE;
+
+    VkDynamicState dynamicStates[] = {
+        VK_DYNAMIC_STATE_DEPTH_BIAS
+    };
+
+    VkPipelineDynamicStateCreateInfo dynamicInfo{};
+    dynamicInfo.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicInfo.dynamicStateCount = 1;
+    dynamicInfo.pDynamicStates    = dynamicStates;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask =
@@ -657,6 +666,7 @@ bool VulkanRenderer::create_graphics_pipeline()
     pipelineInfo.pMultisampleState   = &multisample;
     pipelineInfo.pDepthStencilState  = &depthStencil;
     pipelineInfo.pColorBlendState    = &colorBlend;
+    pipelineInfo.pDynamicState       = &dynamicInfo;
     pipelineInfo.layout              = pipeline_layout_;
     pipelineInfo.renderPass          = render_pass_;
     pipelineInfo.subpass             = 0;
@@ -1201,13 +1211,11 @@ void VulkanRenderer::update_ground_mesh(float y, float half_extent)
 }
 
 // =================== 命令缓冲 & draw ===================
-
 void VulkanRenderer::record_command_buffers()
 {
     for (size_t i = 0; i < command_buffers_.size(); ++i) {
         VkCommandBuffer cmd = command_buffers_[i];
 
-        // 开始录制 command buffer
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         beginInfo.flags = 0;
@@ -1217,7 +1225,6 @@ void VulkanRenderer::record_command_buffers()
             throw std::runtime_error("failed to begin recording command buffer");
         }
 
-        // 设置 render pass begin
         VkRenderPassBeginInfo rpBegin{};
         rpBegin.sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         rpBegin.renderPass  = render_pass_;
@@ -1225,26 +1232,29 @@ void VulkanRenderer::record_command_buffers()
         rpBegin.renderArea.offset = {0, 0};
         rpBegin.renderArea.extent = swapchain_extent_;
 
-        // 清颜色 + 深度
         VkClearValue clearValues[2];
-        clearValues[0].color        = {{0.02f, 0.02f, 0.05f, 1.0f}};  // 背景色
-        clearValues[1].depthStencil = {1.0f, 0};                       // 深度=1.0
+        clearValues[0].color        = {{0.02f, 0.02f, 0.05f, 1.0f}};
+        clearValues[1].depthStencil = {1.0f, 0};
 
         rpBegin.clearValueCount = 2;
         rpBegin.pClearValues    = clearValues;
 
         vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
-        // 绑定图形管线
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_);
 
-        // Push 常量结构：MVP + 颜色
         PushConstants pc{};
         pc.mvp = mvp_;
 
-        // ===== 1) 画地面 =====
+        // ===== 1) 地面 =====
         if (ground_index_count_ > 0) {
-            pc.color = glm::vec4(0.20f, 0.25f, 0.20f, 1.0f);  // 偏绿色地板
+            // 地面不用偏移
+            vkCmdSetDepthBias(cmd,
+                              0.0f,   // constantFactor
+                              0.0f,   // clamp
+                              0.0f);  // slopeFactor
+
+            pc.color = glm::vec4(0.20f, 0.25f, 0.20f, 1.0f);
 
             vkCmdPushConstants(
                 cmd,
@@ -1262,9 +1272,15 @@ void VulkanRenderer::record_command_buffers()
             vkCmdDrawIndexed(cmd, ground_index_count_, 1, 0, 0, 0);
         }
 
-        // ===== 2) 画方块 =====
+        // ===== 2) 方块 =====
         if (cube_index_count_ > 0) {
-            pc.color = glm::vec4(0.85f, 0.35f, 0.10f, 1.0f);  // 比较亮的橙红色方块
+            // 方块也用 0 bias
+            vkCmdSetDepthBias(cmd,
+                              0.0f,
+                              0.0f,
+                              0.0f);
+
+            pc.color = glm::vec4(0.85f, 0.35f, 0.10f, 1.0f);
 
             vkCmdPushConstants(
                 cmd,
@@ -1282,9 +1298,16 @@ void VulkanRenderer::record_command_buffers()
             vkCmdDrawIndexed(cmd, cube_index_count_, 1, 0, 0, 0);
         }
 
-        // ===== 3) 画布 =====
+        // ===== 3) 布 =====
         if (index_count_ > 0) {
-            pc.color = glm::vec4(0.40f, 0.40f, 0.90f, 1.0f);  // 布：偏蓝一点
+            // ⭐ 关键：给布一个负的 depth bias，让它在深度上整体“靠前一点” ⭐
+            // 这个值可以调：-0.0005f ~ -0.01f 之间试试
+            vkCmdSetDepthBias(cmd,
+                              -0.01f, // constantFactor：负数=向相机方向拉近
+                              0.0f,
+                              0.0f);   // slopeFactor 先用 0，足够了
+
+            pc.color = glm::vec4(0.40f, 0.40f, 0.90f, 1.0f);
 
             vkCmdPushConstants(
                 cmd,
@@ -1299,19 +1322,11 @@ void VulkanRenderer::record_command_buffers()
             VkDeviceSize offs[] = { 0 };
             vkCmdBindVertexBuffers(cmd, 0, 1, vb, offs);
             vkCmdBindIndexBuffer(cmd, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
-
-            vkCmdDrawIndexed(
-                cmd,
-                static_cast<uint32_t>(index_count_),
-                1,
-                0, 0, 0
-            );
+            vkCmdDrawIndexed(cmd, static_cast<uint32_t>(index_count_), 1, 0, 0, 0);
         }
 
-        // 结束 render pass
         vkCmdEndRenderPass(cmd);
 
-        // 结束 command buffer 录制
         if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
             throw std::runtime_error("failed to record command buffer");
         }

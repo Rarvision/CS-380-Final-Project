@@ -340,7 +340,7 @@ int main()
             }
 
             renderer.update_mesh(host_vertices, indices);
-            renderer.update_box_mesh(coll.box.center, coll.box.half_extent);
+            renderer.update_box_mesh(coll.box.center, coll.box.half_extent * 0.94f);
             renderer.update_ground_mesh(coll.ground.y, 5.0f);
         }
 
@@ -381,7 +381,7 @@ int main()
             coll.box.center.z = glm::clamp(coll.box.center.z, -4.0f, 4.0f);
 
             sim.update_collision_scene(coll);
-            renderer.update_box_mesh(coll.box.center, coll.box.half_extent);
+            renderer.update_box_mesh(coll.box.center, coll.box.half_extent * 0.94f);
 
             // ---- 更新风参数（带扰动）----
             // wind_cfg.enabled = wind_on;

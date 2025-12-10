@@ -257,7 +257,7 @@ __global__ void kernel_collide_box(
     u32 idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
 
-    const float separation = 0.002f;
+    const float separation = 0.001f;
 
     float3 p = pos[idx];
     float3 v = vel[idx];
