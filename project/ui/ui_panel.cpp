@@ -129,14 +129,14 @@ void draw_panel(UIState& ui_state)
 {
     ImGui::Begin("Cloth Controls");
 
-    // 1) 风场
+    // wind
     if (ImGui::CollapsingHeader("Wind", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Enabled", &ui_state.wind_enabled);
         ImGui::SliderFloat("Base Strength", &ui_state.wind_base_strength,
                            0.0f, 100.0f, "%.1f");
     }
 
-    // 2) 布料物理参数
+    // cloth physics
     if (ImGui::CollapsingHeader("Cloth Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
         slider_with_release("Mass",
                             &ui_state.cloth_mass,
@@ -162,20 +162,19 @@ void draw_panel(UIState& ui_state)
                             ImGuiSliderFlags_Logarithmic);
     }
 
-    // 3) 悬挂 / 掉落
+    // pin/hang switch
     if (ImGui::CollapsingHeader("Pinning", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Pin top edge", &ui_state.pin_top_edge);
+        // ImGui::TextWrapped("When pin is ON, cloth is hanging.\n"
+        //                    "Turn it OFF to let the cloth fall.\n"
+        //                    "Click the button below to reset to hanging pose.");
 
-        ImGui::TextWrapped("When pin is ON, cloth is hanging.\n"
-                           "Turn it OFF to let the cloth fall.\n"
-                           "Click the button below to reset to hanging pose.");
-
-        if (ImGui::Button("Reset cloth to hanging pose")) {
-            ui_state.request_reset_hang = true;
-        }
+        // if (ImGui::Button("Reset cloth to hanging pose")) {
+        //     ui_state.request_reset_hang = true;
+        // }
     }
 
-    // 4) 材质预设
+    // materials preset
     if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
         int index = ui_state.current_material_index;
         if (ImGui::Combo("Cloth Material", &index,
