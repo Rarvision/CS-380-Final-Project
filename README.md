@@ -82,8 +82,7 @@ Time integration uses a fixed time step with a semi-implicit Euler scheme.
 PROGRAM ARCHITECTURE
 --------------------
 
-Project Structure
-
+```text
 .
 ├── app
 │   └── main.cpp                     # Application entry point
@@ -118,27 +117,18 @@ Project Structure
 └── CMakeLists.txt                   # CMake build configuration
 
 
-Data Flow
-
-CUDA physics simulation
-↓
-CPU readback of positions and normals
-↓
-Vulkan vertex buffer update and rendering
-
-
 BUILD AND RUN
 -------------
 
 Example build steps:
 
 git clone [REPOSITORY_URL](https://github.com/Rarvision/CS-380-Final-Project.git)
-cd cloth-simulation
-mkdir build
-cd build
+cd CS-380-Final-Project/
+mkdir project/build
+cd project/build
 cmake ..
 make
-./cloth_sim
+./clothsim
 
 
 REQUIREMENTS
