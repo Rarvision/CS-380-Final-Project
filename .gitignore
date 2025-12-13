@@ -1,18 +1,52 @@
+# =========================
 # Build output
+# =========================
+project/build/
+project/build/**
+
 build/
+build/**
 
+# =========================
 # Editor settings
+# =========================
 .vscode/
+.vscode/**
 
+# =========================
 # OS files
+# =========================
 .DS_Store
+Thumbs.db
 
-# CMake
+# =========================
+# CMake / Make generated files
+# =========================
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 Makefile
+*.cmake
+*.ninja
+*.ninja_deps
+*.ninja_log
+compile_commands.json
 
-# ImGui settings
+# =========================
+# ImGui runtime config
+# =========================
 imgui.ini
+
+# =========================
+# Binaries / libs (common outputs)
+# =========================
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
 
