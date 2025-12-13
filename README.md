@@ -1,7 +1,7 @@
 OVERVIEW
 --------
-![Cloth Simulation Screenshot](assets/pngs/cotton.png)
-![Cloth Simulation Screenshot](assets/pngs/PVC.png)
+![Cloth Simulation Screenshot](projet/assets/pngs/cotton.png)
+![Cloth Simulation Screenshot](project/assets/pngs/PVC.png)
 
 This project implements an interactive real-time cloth simulation system using
 CUDA for physics computation, Vulkan for real-time rendering, and Dear ImGui for
