@@ -31,13 +31,11 @@ public:
         solver_->step(dt, scene_.forces);
     }
 
-    // Vulkan 用的 GPU 句柄（以后做 interop 时用）
     void* device_positions() const { return solver_->get_device_position_buffer(); }
     void* device_normals() const   { return solver_->get_device_normal_buffer(); }
     void* device_indices() const   { return solver_->get_device_index_buffer(); }
     u32   index_count() const      { return n_indices_; }
 
-    // 路线 A：CPU 回读
     void download_positions_normals(
         std::vector<Vec3>& out_pos,
         std::vector<Vec3>& out_normals)

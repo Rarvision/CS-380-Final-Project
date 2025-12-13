@@ -43,6 +43,13 @@ add_executable(clothsim
     core/cloth/cloth_builder.cpp
     render/vulkan/vk_renderer.cpp
     render/vertex.hpp
+    ui/ui_panel.cpp
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_impl_glfw.cpp
+    third_party/imgui/imgui_impl_vulkan.cpp
 )
 
 target_link_libraries(clothsim

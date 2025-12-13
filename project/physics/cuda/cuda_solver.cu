@@ -11,7 +11,7 @@
 #include "../core/cloth/cloth_model.hpp"
 #include "../core/common/types.hpp"
 
-// 为 device 使用简单 float3 运算
+// float3 helper functions for device
 __host__ __device__ inline float3 make_f3(float x, float y, float z) {
     return make_float3(x, y, z);
 }
@@ -24,7 +24,6 @@ __host__ __device__ inline Vec3 to_vec3(const float3& f) {
     return Vec3(f.x, f.y, f.z);
 }
 
-// ======= float3 基础运算 =======
 __device__ inline float3 f3_add(const float3& a, const float3& b) {
     return make_float3(a.x + b.x, a.y + b.y, a.z + b.z);
 }
@@ -60,7 +59,6 @@ __device__ inline float3 f3_normalize(const float3& a) {
     return f3_scale(a, inv);
 }
 
-// ======= float3 的 atomicAdd =======
 struct SpringDev {
     u32 i;
     u32 j;
@@ -68,11 +66,9 @@ struct SpringDev {
     f32 k;
 };
 
-// 全局力缓冲
 static CudaBuffer d_force;
 
-// ---------------- host 辅助函数 ----------------
-
+// host helper functions
 template<typename T>
 static void alloc_cuda_buffer(CudaBuffer& buf, size_t count) {
     buf.bytes = count * sizeof(T);
@@ -93,7 +89,7 @@ static void upload_vector(CudaBuffer& buf, const std::vector<T>& v) {
     cudaMemcpy(buf.d_ptr, v.data(), buf.bytes, cudaMemcpyHostToDevice);
 }
 
-// ---------------- kernels ----------------
+// kernels
 
 __global__ void kernel_clear_forces(float3* force, u32 n)
 {
@@ -142,43 +138,38 @@ __global__ void kernel_apply_wind(
     u32 idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
 
-    // 归一化风向
     float3 wdir = f3_normalize(wind_dir);
 
     float3 p   = pos[idx];
     float3 nrm = f3_normalize(normal[idx]);
 
-    // ---------- 1) 只对“迎风面”施力 ----------
-    float ndot = f3_dot(nrm, wdir);              // 法线与风向的夹角
-    float facing = fmaxf(ndot, 0.0f);            // 背风面不受风/受很小风
+    // only apply wind force to the triangle facing it
+    float ndot = f3_dot(nrm, wdir);
+    float facing = fmaxf(ndot, 0.0f);
 
-    // 基础风力（方向 = 风向）
     float3 F_base = f3_scale(wdir, strength * facing);
 
-    // ---------- 2) 空间 + 时间噪声，制造旗子上的“涟漪” ----------
-    // 频率可以调节：freq 控制波长；time_freq 控制时间变化速度
-    const float freq      = 8.0f;    // 空间频率：越大图案越密
-    const float time_freq = 1.5f;    // 时间频率：越大变化越快
+    // space/time noise, to create ripples on the cloth
+    const float freq      = 8.0f;    // space frequency：higher -> denser
+    const float time_freq = 1.5f;    // time frequency: higher -> faster vibration
 
     float phase = freq * (p.x + 0.5f * p.y) + time_freq * time;
-    float noise = __sinf(phase) * __cosf(0.7f * phase + 1.3f); // [-1,1] 左右
+    float noise = __sinf(phase) * __cosf(0.7f * phase + 1.3f); // [-1,1]
 
-    // 让噪声幅值小一些，避免把布吹炸
-    const float noise_scale = 0.3f;  // 占整体强度的大约 30%
+    const float noise_scale = 0.3f;
     float  noise_strength   = strength * noise_scale * noise;
 
-    // 噪声方向：取一个垂直于风向的向量，让布有“横向摆动”
+    // apply some lateral swing
     float3 up    = make_float3(0.0f, 1.0f, 0.0f);
     float3 side  = f3_cross(wdir, up);
     if (f3_len(side) < 1e-4f) {
-        // 避免 wdir 跟 up 平行
         side = f3_cross(wdir, make_float3(0.0f, 0.0f, 1.0f));
     }
     side = f3_normalize(side);
 
     float3 F_turb = f3_scale(side, noise_strength);
 
-    // ---------- 3) 合成风力 ----------
+    // combine all effects
     float3 F_total = f3_add(F_base, F_turb);
     force[idx]     = f3_add(force[idx], F_total);
 }
@@ -192,19 +183,15 @@ __global__ void kernel_click_impulse(
     if (idx >= n) return;
 
     float3 p = pos[idx];
-    float3 d = f3_sub(p, click_pos); // 从点击中心指向粒子（往外推）
+    float3 d = f3_sub(p, click_pos);
     float dist = f3_len(d);
     if (dist < radius && dist > 1e-6f) {
-        // 基于距离的权重：中心最大，边缘为 0
-        float w = (radius - dist) / radius; // 0..1
+        // center: max, edge: 0
+        float w = (radius - dist) / radius;
 
-        // 单位方向
         float3 dir = f3_scale(d, 1.0f / dist);
-
-        // 原本的冲量大小
         float impulse = strength * w;
 
-        // ⭐ 限制单点最大速度增量，防止一次性拉太猛
         const float max_dv = 4.0f;
         if (impulse > max_dv) impulse = max_dv;
 
@@ -264,25 +251,22 @@ __global__ void kernel_collide_box(
 
     float3 local = f3_sub(p, center);
 
-    // 不在 box 内部就不管
     if (fabsf(local.x) > half_extent.x ||
         fabsf(local.y) > half_extent.y ||
         fabsf(local.z) > half_extent.z) {
         return;
     }
 
-    // 记录修正前的位置
     float3 local_before = local;
 
     float dx = half_extent.x - fabsf(local.x);
     float dy = half_extent.y - fabsf(local.y);
     float dz = half_extent.z - fabsf(local.z);
 
-    // 选最小穿透方向
+    // select the direction of minimum penetration
     if (dx <= dy && dx <= dz) {
         float sx = (local.x >= 0.0f) ? 1.0f : -1.0f;
         local.x = sx * (half_extent.x + separation);
-        // 只衰减一下法向速度，而不是归零
         v.x *= 0.2f;
     } else if (dy <= dx && dy <= dz) {
         float sy = (local.y >= 0.0f) ? 1.0f : -1.0f;
@@ -294,10 +278,10 @@ __global__ void kernel_collide_box(
         v.z *= 0.2f;
     }
 
-    // === 新加：限制单次修正位移的最大长度 ===
+    // limit the maximum length of a single correction displacement
     float3 corr = f3_sub(local, local_before);
     float  corr_len = f3_len(corr);
-    const float max_corr = 0.05f;  // 每帧最多移动 5cm（根据你的单位）
+    const float max_corr = 0.05f;
 
     if (corr_len > max_corr && corr_len > 1e-6f) {
         float scale = max_corr / corr_len;
@@ -354,7 +338,7 @@ __global__ void kernel_normalize_normals(float3* normal, u32 n)
     }
 }
 
-// ---------------- CudaSolver 方法实现 ----------------
+// cuda solver implementation
 
 CudaSolver::CudaSolver()
 {
@@ -386,30 +370,28 @@ void CudaSolver::upload(const ClothModel& model)
     dev_.n_springs  = static_cast<u32>(model.springs.size());
     dev_.n_indices  = static_cast<u32>(model.indices.size());
 
-    // 分配 pos / vel / normal / force 都按 float3 计
+    // allocate pos / vel / normal / force
     alloc_cuda_buffer<float3>(dev_.pos, dev_.n_vertices);
     alloc_cuda_buffer<float3>(dev_.vel, dev_.n_vertices);
     alloc_cuda_buffer<float3>(dev_.normal, dev_.n_vertices);
     alloc_cuda_buffer<float3>(d_force, dev_.n_vertices);
 
-    // host -> device: Vec3 数组转 float3 数组
+    // host -> device: Vec3 -> float3
     std::vector<float3> tmp_pos(dev_.n_vertices);
     std::vector<float3> tmp_vel(dev_.n_vertices, make_float3(0.f, 0.f, 0.f));
     for (u32 i = 0; i < dev_.n_vertices; ++i) {
         tmp_pos[i] = make_f3(model.positions[i]);
-        // 如果你 ClothModel 里暂时没用 velocities，可以先全 0
-        // 否则 tmp_vel[i] = make_f3(model.velocities[i]);
     }
     cudaMemcpy(dev_.pos.d_ptr, tmp_pos.data(),
                dev_.n_vertices * sizeof(float3), cudaMemcpyHostToDevice);
     cudaMemcpy(dev_.vel.d_ptr, tmp_vel.data(),
                dev_.n_vertices * sizeof(float3), cudaMemcpyHostToDevice);
 
-    // indices / fixed 可以直接按 u32 传
+    // indices / fixed
     upload_vector<u32>(dev_.indices, model.indices);
     upload_vector<u32>(dev_.fixed,   model.fixed);
 
-    // springs 同前，只是保持 SpringDev 类型
+    // springs
     std::vector<SpringDev> springs_dev(dev_.n_springs);
     for (u32 i = 0; i < dev_.n_springs; ++i) {
         const Spring& s = model.springs[i];
@@ -419,15 +401,15 @@ void CudaSolver::upload(const ClothModel& model)
 
     const size_t n = dev_.n_vertices;
     if (n > 0) {
-        // 1) 初始速度全 0
+        // init velocity: 0
         cudaMemset(dev_.vel.d_ptr,    0, n * sizeof(float3));
-        // 2) 初始法线全 0（第一步 kernel_clear_normals + accumulate_normals 会再算一次）
+        // init normal: 0
         cudaMemset(dev_.normal.d_ptr, 0, n * sizeof(float3));
-        // 3) 力缓存全 0
+        // init force: 0
         cudaMemset(d_force.d_ptr,     0, n * sizeof(float3));
     }
 
-    time_ = 0.0f; // 重新开始计时
+    time_ = 0.0f; // time reset
 
 }
 
@@ -464,7 +446,6 @@ void CudaSolver::substep(f32 dt, const ExternalForces& f)
     float3* d_norm  = reinterpret_cast<float3*>(dev_.normal.d_ptr);
     u32*    d_idx   = reinterpret_cast<u32*>(dev_.indices.d_ptr);
     u32*    d_fixed = reinterpret_cast<u32*>(dev_.fixed.d_ptr);
-    // SpringDev* d_s  = reinterpret_cast<SpringDev*>(dev_.springs.d_ptr);
     float3* d_f     = reinterpret_cast<float3*>(d_force.d_ptr);
 
     const int blockSize = 256;
@@ -473,12 +454,12 @@ void CudaSolver::substep(f32 dt, const ExternalForces& f)
     int gridTris    = (nIndices / 3 + blockSize - 1) / blockSize;
 
     time_ += dt;
-    // 1. 清力
+    // force
     kernel_clear_forces<<<gridVerts, blockSize>>>(d_f, nVerts);
 
-    // 2. 风
+    // wind
     if (f.wind_strength > 0.0f) {
-    float3 wdir = make_f3(f.wind_dir);  // 你已经有 make_f3(Vec3) 了
+    float3 wdir = make_f3(f.wind_dir);
     kernel_apply_wind<<<gridVerts, blockSize>>>(
         d_pos, d_norm, d_f,
         nVerts,
@@ -487,17 +468,17 @@ void CudaSolver::substep(f32 dt, const ExternalForces& f)
         time_);
     }
 
-    // 3. 弹簧
+    // springs
     kernel_apply_springs<<<gridSprings, blockSize>>>(
         d_pos, reinterpret_cast<SpringDev*>(dev_.springs.d_ptr), nSprings, d_f);
 
-    // 4. 积分
-    const f32 inv_mass = 1.0f; // 以后可以用 model.mass_per_node
+    // integral
+    const f32 inv_mass = 1.0f;
     float3 g = make_float3(f.gravity.x, f.gravity.y, f.gravity.z);
     kernel_integrate<<<gridVerts, blockSize>>>(
         d_pos, d_vel, d_f, d_fixed, nVerts, inv_mass, dt, g, damping_);
 
-    // 5. 碰撞
+    // collision
     kernel_collide_plane<<<gridVerts, blockSize>>>(
         d_pos, d_vel, nVerts, collision_.ground.y);
 
@@ -512,7 +493,7 @@ void CudaSolver::substep(f32 dt, const ExternalForces& f)
             d_pos, d_vel, nVerts, box_center, box_halfext);
     }
 
-    // 6. 法线
+    // normals
     kernel_clear_normals<<<gridVerts, blockSize>>>(d_norm, nVerts);
     kernel_accumulate_normals<<<gridTris, blockSize>>>(
         d_pos, d_norm, d_idx, nIndices);

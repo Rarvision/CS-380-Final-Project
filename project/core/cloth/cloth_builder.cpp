@@ -17,23 +17,22 @@ ClothModel build_regular_grid(const ClothBuildParams& p)
     c.fixed.assign(n_vertices, 0u);
     c.mass_per_node = p.mass;
 
-    // 约定：布在 XY 平面；X 水平，Y“向下”为正
-    // y = 0 行作为“屏幕上边缘”
+    // cloth is set in XY plane
     const f32 w = (p.nx - 1) * p.spacing;
     const f32 h = (p.ny - 1) * p.spacing;
-    const Vec3 origin = Vec3(-0.5f * w, 0.0f, 0.0f); // 顶边在 y = 0
+    const Vec3 origin = Vec3(-0.5f * w, 0.0f, 0.0f);
 
     for (u32 y = 0; y < p.ny; ++y) {
         for (u32 x = 0; x < p.nx; ++x) {
             const u32 idx = y * p.nx + x;
             float px = origin.x + x * p.spacing;
-            float py = origin.y + y * p.spacing; // y 越大越“往下”
+            float py = origin.y + y * p.spacing;
             float pz = 0.0f;
             c.positions[idx] = Vec3(px, py, pz);
         }
     }
 
-    // indices / springs 原样
+    // indices / springs
     for (u32 y = 0; y < p.ny - 1; ++y) {
         for (u32 x = 0; x < p.nx - 1; ++x) {
             u32 i0 = y * p.nx + x;
@@ -103,7 +102,7 @@ void compute_springs(ClothModel& c, f32 k_struct, f32 k_shear, f32 k_bend)
 {
     c.springs.clear();
 
-    // 结构弹簧（上下左右）
+    // structure springs
     for (u32 y = 0; y < c.ny; ++y) {
         for (u32 x = 0; x < c.nx; ++x) {
             u32 i = y * c.nx + x;
@@ -118,7 +117,7 @@ void compute_springs(ClothModel& c, f32 k_struct, f32 k_shear, f32 k_bend)
         }
     }
 
-    // 剪切弹簧（对角线）
+    // shear springs
     for (u32 y = 0; y < c.ny - 1; ++y) {
         for (u32 x = 0; x < c.nx - 1; ++x) {
             u32 i = y * c.nx + x;
@@ -131,7 +130,7 @@ void compute_springs(ClothModel& c, f32 k_struct, f32 k_shear, f32 k_bend)
         }
     }
 
-    // 弯曲弹簧（间隔一个点的结构弹簧）
+    // bend springs
     if (k_bend > 0.0f) {
         for (u32 y = 0; y < c.ny; ++y) {
             for (u32 x = 0; x < c.nx; ++x) {

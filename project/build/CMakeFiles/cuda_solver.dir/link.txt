@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcuda_solver.a CMakeFiles/cuda_solver.dir/physics/cuda/cuda_solver.cu.o
+/usr/bin/ranlib libcuda_solver.a

@@ -6,6 +6,7 @@
 struct Vertex {
     Vec3 pos;
     Vec3 normal;
+    glm::vec2  uv;
 
     static VkVertexInputBindingDescription binding_description() {
         VkVertexInputBindingDescription binding{};
@@ -15,8 +16,8 @@ struct Vertex {
         return binding;
     }
 
-    static std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions() {
-        std::array<VkVertexInputAttributeDescription, 2> attrs{};
+    static std::array<VkVertexInputAttributeDescription, 3> attribute_descriptions() {
+        std::array<VkVertexInputAttributeDescription, 3> attrs{};
 
         // location 0: position
         attrs[0].binding  = 0;
@@ -29,6 +30,12 @@ struct Vertex {
         attrs[1].location = 1;
         attrs[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
         attrs[1].offset   = offsetof(Vertex, normal);
+
+        // location 2: uv
+        attrs[2].binding  = 0;
+        attrs[2].location = 2;
+        attrs[2].format   = VK_FORMAT_R32G32_SFLOAT;
+        attrs[2].offset   = offsetof(Vertex, uv);
 
         return attrs;
     }
