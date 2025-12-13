@@ -132,7 +132,7 @@ BUILD AND RUN
 
 Example build steps:
 
-git clone REPOSITORY_URL
+git clone [REPOSITORY_URL](https://github.com/Rarvision/CS-380-Final-Project.git)
 cd cloth-simulation
 mkdir build
 cd build
