@@ -1,6 +1,6 @@
 OVERVIEW
 --------
-![Cloth Simulation Screenshot](projet/assets/pngs/cotton.png)
+![Cloth Simulation Screenshot](project/assets/pngs/cotton.png)
 ![Cloth Simulation Screenshot](project/assets/pngs/PVC.png)
 
 This project implements an interactive real-time cloth simulation system using
