@@ -122,7 +122,7 @@ BUILD AND RUN
 
 Example build steps:
 ```
-git clone [REPOSITORY_URL](https://github.com/Rarvision/CS-380-Final-Project.git)
+git clone https://github.com/Rarvision/CS-380-Final-Project.git
 cd CS-380-Final-Project/
 mkdir project/build
 cd project/build
