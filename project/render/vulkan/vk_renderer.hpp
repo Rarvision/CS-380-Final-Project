@@ -16,7 +16,7 @@ public:
     const glm::mat4& view() const { return view_; }
     const glm::mat4& proj() const { return proj_; }
 
-    // --- ImGui / UI integration helpers ---
+    // ImGui / UI integration helpers
     VkInstance       vk_instance() const         { return instance_; }
     VkPhysicalDevice vk_physical_device() const  { return physical_device_; }
     VkDevice         vk_device() const           { return device_; }

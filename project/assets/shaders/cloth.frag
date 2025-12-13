@@ -15,9 +15,9 @@ layout(push_constant) uniform Push {
 } pc;
 
 // 对应 C++ 的材质索引：0/1/2：布，3：方块，4：地面
-const int MAT_SILK    = 0;
+const int MAT_ELASTANE    = 0;
 const int MAT_HEAVY   = 1;
-const int MAT_PLASTIC = 2;
+const int MAT_PVC = 2;
 const int MAT_CUBE    = 3;
 const int MAT_GROUND  = 4;
 
@@ -43,8 +43,8 @@ void main()
     vec3 baseColor;
     float alpha = 1.0;
 
-    if (matID == MAT_PLASTIC) {
-        // Plastic：不使用纹理，只给一个半透明淡蓝颜色
+    if (matID == MAT_PVC) {
+        // Pvc：不使用纹理，只给一个半透明淡蓝颜色
         baseColor = vec3(0.90, 0.96, 1.00);
         alpha     = 0.35;
     } else {

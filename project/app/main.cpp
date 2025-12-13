@@ -312,7 +312,7 @@ int main()
     glfwSetCursorPosCallback(window, cursor_pos_callback);
 
     UIState ui;
-    // defult material: silk
+    // defult material: elastane
     ui.current_material_index = 0;
     apply_material_preset(ui);
 

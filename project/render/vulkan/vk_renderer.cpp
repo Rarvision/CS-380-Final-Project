@@ -24,16 +24,16 @@ static bool g_imgui_fonts_uploaded = false;
 struct PushConstants {
     glm::mat4 mvp;
 
-    // params0: xyz = lightDir（世界坐标）, w = materialIndex
+    // params0: xyz = lightDir, w = materialIndex
     glm::vec4 params0;
 
-    // params1: xyz = boxCenter（世界坐标）, w = boxRadius（在 xz 平面上的半径）
+    // params1: xyz = boxCenter, w = boxRadius
     glm::vec4 params1;
 
-    // params2: xyz = clothCenter（世界坐标）, w = 1.0
+    // params2: xyz = clothCenter, w = 1.0
     glm::vec4 params2;
 
-    // params3: xy = clothSize（xz 尺寸）, zw 预留
+    // params3: xy = clothSize, zw reserved
     glm::vec4 params3;
 };
 
@@ -55,7 +55,7 @@ struct SwapChainSupportDetails {
     std::vector<VkPresentModeKHR>   present_modes;
 };
 
-// =================== 工具函数 ===================
+// tools
 
 static std::vector<char> read_file(const std::string& filename)
 {
@@ -149,12 +149,10 @@ static VkExtent2D choose_swap_extent(const VkSurfaceCapabilitiesKHR& caps, uint3
     }
 }
 
-// =================== VulkanRenderer 实现 ===================
+// VulkanRenderer implemenation
 
 VulkanRenderer::~VulkanRenderer()
 {
-    // std::cerr << "[VK] ~VulkanRenderer begin\n";
-
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
     }
@@ -216,8 +214,6 @@ VulkanRenderer::~VulkanRenderer()
         instance_ = VK_NULL_HANDLE;
     }
 
-    // std::cerr << "[VK] ~VulkanRenderer end\n";
-
 }
 
 
@@ -242,31 +238,30 @@ bool VulkanRenderer::init(GLFWwindow* window, uint32_t width, uint32_t height)
     if (!allocate_command_buffers()) return false;
     if (!create_sync_objects())    return false;
 
-    // 先创建一个空的顶点/索引缓冲（后面 update_mesh 会重建）
     create_vertex_buffer(sizeof(Vertex) * 1);
     create_index_buffer(sizeof(uint32_t) * 1);
 
-    // ★ 创建纹理资源 + descriptor
+    // create texture resources + descriptor
     if (!create_cloth_textures())   return false;
     if (!create_cloth_sampler())    return false;
     if (!create_descriptor_pool())  return false;
     if (!create_descriptor_set())   return false;
 
-    // ====== 计算一个简单 MVP 矩阵 ======
+    // MVP calculation
     float aspect = static_cast<float>(swapchain_extent_.width) /
                    static_cast<float>(swapchain_extent_.height);
 
     proj_ = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 10.0f);
-    // Vulkan NDC 的 Y 是反的，通常要翻一下glm::mat4 proj
+    // reverseglm::mat4 proj
     proj_[1][1] *= -1.0f;
 
     view_ = glm::lookAt(
-        glm::vec3(0.0f, 0.2f, -5.0f),  // 相机位置：稍微在前面、略微偏上
-        glm::vec3(0.0f, 0.0f, 0.0f),  // 看向原点
-        glm::vec3(0.0f, 1.0f, 0.0f)   // 世界向上方向
+        glm::vec3(0.0f, 0.2f, -5.0f),
+        glm::vec3(0.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f)
     );
 
-    model_ = glm::mat4(1.0f); // 后面要旋转布的话就改这里
+    model_ = glm::mat4(1.0f);
     mvp_ = proj_ * view_ * model_;
 
     return true;
@@ -277,7 +272,7 @@ void VulkanRenderer::wait_idle()
     if (device_) vkDeviceWaitIdle(device_);
 }
 
-// ========== 创建 Instance / Surface / Device / Swapchain ==========
+// create Instance / Surface / Device / Swapchain
 
 bool VulkanRenderer::create_instance()
 {
@@ -331,7 +326,7 @@ bool VulkanRenderer::pick_physical_device()
         QueueFamilyIndices indices = find_queue_families(dev, surface_);
         bool extensions_ok = false;
 
-        // 检查 swapchain 扩展
+        // check swapchain extension
         uint32_t extCount = 0;
         vkEnumerateDeviceExtensionProperties(dev, nullptr, &extCount, nullptr);
         std::vector<VkExtensionProperties> exts(extCount);
@@ -792,7 +787,7 @@ bool VulkanRenderer::create_sync_objects()
     return true;
 }
 
-// =================== 顶点/索引缓冲 ===================
+// vertex/indices buffers
 
 bool VulkanRenderer::create_vertex_buffer(size_t size_bytes)
 {
@@ -899,7 +894,7 @@ bool VulkanRenderer::create_depth_resources()
 
     vkBindImageMemory(device_, depth_image_, depth_image_memory_, 0);
 
-    // 创建 image view
+    // create image view
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image    = depth_image_;
@@ -923,9 +918,6 @@ bool VulkanRenderer::create_depth_resources()
 void VulkanRenderer::update_mesh(const std::vector<Vertex>& vertices,
                                  const std::vector<u32>& indices)
 {
-//    std::cerr << "[VK] update_mesh: vertices=" << vertices.size()
-//              << " indices=" << indices.size() << std::endl;
-
     size_t vbytes = vertices.size() * sizeof(Vertex);
     size_t ibytes = indices.size()  * sizeof(uint32_t);
 
@@ -987,7 +979,6 @@ void VulkanRenderer::update_box_mesh(const Vec3& center, const Vec3& half_extent
         a.pos = v0; b.pos = v1; c.pos = v2; d.pos = v3;
         a.normal = b.normal = c.normal = d.normal = n;
 
-        // 统一 uv: (0,0) (1,0) (1,1) (0,1)
         a.uv = glm::vec2(0.0f, 0.0f);
         b.uv = glm::vec2(1.0f, 0.0f);
         c.uv = glm::vec2(1.0f, 1.0f);
@@ -1005,7 +996,6 @@ void VulkanRenderer::update_box_mesh(const Vec3& center, const Vec3& half_extent
         verts.push_back(c);
         verts.push_back(d);
 
-        // 两个三角： (0,1,2) (2,3,0)
         indices.push_back(start + 0);
         indices.push_back(start + 1);
         indices.push_back(start + 2);
@@ -1061,7 +1051,7 @@ void VulkanRenderer::update_box_mesh(const Vec3& center, const Vec3& half_extent
         Vec3(cx + hx, cy - hy, cz - hz),
         Vec3(cx - hx, cy - hy, cz - hz),
         Vec3(0.0f, -1.0f, 0.0f),
-        true   // 这里如果方向颠倒，可以 flip_uv_y 再试
+        true
     );
 
     // top (+Y)
@@ -1074,12 +1064,10 @@ void VulkanRenderer::update_box_mesh(const Vec3& center, const Vec3& half_extent
         false
     );
 
-    // 后面的 buffer 分配和拷贝逻辑不变，只是改用 verts / indices
-
     VkDeviceSize vbytes = sizeof(Vertex) * verts.size();
     VkDeviceSize ibytes = sizeof(u32)    * indices.size();
 
-    // 顶点缓冲：同你现在的实现
+    // vertex buffer
     if (cube_vertex_buffer_ == VK_NULL_HANDLE || vbytes > cube_vertex_buffer_size_) {
         if (cube_vertex_buffer_ != VK_NULL_HANDLE) {
             vkDestroyBuffer(device_, cube_vertex_buffer_, nullptr);
@@ -1141,7 +1129,7 @@ void VulkanRenderer::update_box_mesh(const Vec3& center, const Vec3& half_extent
 
 void VulkanRenderer::update_ground_mesh(float y, float half_extent)
 {
-    // 做一个大方形地板：[-h, h] x [-h, h]，位于 y 高度
+    // ground: [-h, h] x [-h, h] at height y
     std::vector<Vertex> verts(4);
     float h = half_extent;
 
@@ -1168,7 +1156,6 @@ void VulkanRenderer::update_ground_mesh(float y, float half_extent)
     VkDeviceSize vbytes = sizeof(Vertex) * verts.size();
     VkDeviceSize ibytes = sizeof(u32)    * indices.size();
 
-    // --- 顶点缓冲 ---
     if (ground_vertex_buffer_ == VK_NULL_HANDLE || vbytes > ground_vertex_buffer_size_) {
         if (ground_vertex_buffer_ != VK_NULL_HANDLE) {
             vkDestroyBuffer(device_, ground_vertex_buffer_, nullptr);
@@ -1207,7 +1194,6 @@ void VulkanRenderer::update_ground_mesh(float y, float half_extent)
         vkBindBufferMemory(device_, ground_vertex_buffer_, ground_vertex_memory_, 0);
     }
 
-    // --- 索引缓冲 ---
     if (ground_index_buffer_ == VK_NULL_HANDLE || ibytes > ground_index_count_ * sizeof(u32)) {
         if (ground_index_buffer_ != VK_NULL_HANDLE) {
             vkDestroyBuffer(device_, ground_index_buffer_, nullptr);
@@ -1244,7 +1230,7 @@ void VulkanRenderer::update_ground_mesh(float y, float half_extent)
         vkBindBufferMemory(device_, ground_index_buffer_, ground_index_memory_, 0);
     }
 
-    // 拷贝数据
+    // memory copy
     void* data = nullptr;
     vkMapMemory(device_, ground_vertex_memory_, 0, vbytes, 0, &data);
     std::memcpy(data, verts.data(), vbytes);
@@ -1257,136 +1243,6 @@ void VulkanRenderer::update_ground_mesh(float y, float half_extent)
     ground_index_count_ = static_cast<u32>(indices.size());
 }
 
-// =================== 命令缓冲 & draw ===================
-// void VulkanRenderer::record_command_buffer(uint32_t imageIndex)
-// {
-//     VkCommandBuffer cmd = command_buffers_[imageIndex];
-
-//     VkCommandBufferBeginInfo beginInfo{};
-//     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-
-//     if (vkBeginCommandBuffer(cmd, &beginInfo) != VK_SUCCESS) {
-//         throw std::runtime_error("failed to begin recording command buffer");
-//     }
-
-//     VkRenderPassBeginInfo rpBegin{};
-//     rpBegin.sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-//     rpBegin.renderPass  = render_pass_;
-//     rpBegin.framebuffer = framebuffers_[imageIndex];
-//     rpBegin.renderArea.offset = {0, 0};
-//     rpBegin.renderArea.extent = swapchain_extent_;
-
-//     VkClearValue clearValues[2];
-//     clearValues[0].color        = {{0.02f, 0.02f, 0.05f, 1.0f}};
-//     clearValues[1].depthStencil = {1.0f, 0};
-
-//     rpBegin.clearValueCount = 2;
-//     rpBegin.pClearValues    = clearValues;
-
-//     vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
-
-//     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_);
-
-//     // 绑定纹理 descriptor set（set = 0）
-//     vkCmdBindDescriptorSets(
-//         cmd,
-//         VK_PIPELINE_BIND_POINT_GRAPHICS,
-//         pipeline_layout_,
-//         0,
-//         1,
-//         &descriptor_set_,
-//         0,
-//         nullptr
-//     );
-
-//     // ==== 填充公共 push 常量 ====
-//     PushConstants pc{};
-//     pc.mvp = mvp_;
-
-//     // params0.xyz = lightDir, w = materialIndex（先填 cloth 当前材质）
-//     pc.params0 = glm::vec4(light_dir_, float(current_material_));
-
-//     // params1.xyz = boxCenter, w = boxRadius
-//     pc.params1 = glm::vec4(shadow_box_center_, shadow_box_radius_);
-
-//     // params2.xyz = clothCenter
-//     pc.params2 = glm::vec4(shadow_cloth_center_, 1.0f);
-
-//     // params3.xy = clothSize
-//     pc.params3 = glm::vec4(shadow_cloth_size_, 0.0f, 0.0f);
-
-//     // ===== 1) 地面：materialIndex = 4 =====
-//     if (ground_index_count_ > 0) {
-//         pc.params0.w = 4.0f;  // 地面材质 ID（在 shader 里用它区分）
-
-//         vkCmdPushConstants(
-//             cmd,
-//             pipeline_layout_,
-//             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-//             0,
-//             PUSH_CONSTANT_SIZE,
-//             &pc
-//         );
-
-//         VkBuffer vb[]       = { ground_vertex_buffer_ };
-//         VkDeviceSize offs[] = { 0 };
-//         vkCmdBindVertexBuffers(cmd, 0, 1, vb, offs);
-//         vkCmdBindIndexBuffer(cmd, ground_index_buffer_, 0, VK_INDEX_TYPE_UINT32);
-//         vkCmdDrawIndexed(cmd, ground_index_count_, 1, 0, 0, 0);
-//     }
-
-//     // ===== 2) 方块：materialIndex = 3 =====
-//     if (cube_index_count_ > 0) {
-//         pc.params0.w = 3.0f;  // 方块材质 ID
-
-//         vkCmdPushConstants(
-//             cmd,
-//             pipeline_layout_,
-//             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-//             0,
-//             PUSH_CONSTANT_SIZE,
-//             &pc
-//         );
-
-//         VkBuffer vb[]       = { cube_vertex_buffer_ };
-//         VkDeviceSize offs[] = { 0 };
-//         vkCmdBindVertexBuffers(cmd, 0, 1, vb, offs);
-//         vkCmdBindIndexBuffer(cmd, cube_index_buffer_, 0, VK_INDEX_TYPE_UINT32);
-//         vkCmdDrawIndexed(cmd, cube_index_count_, 1, 0, 0, 0);
-//     }
-
-//     // ===== 3) 布：materialIndex = current_material_ (0/1/2) =====
-//     if (index_count_ > 0) {
-//         pc.params0.w = float(current_material_);
-
-//         vkCmdPushConstants(
-//             cmd,
-//             pipeline_layout_,
-//             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-//             0,
-//             PUSH_CONSTANT_SIZE,
-//             &pc
-//         );
-
-//         VkBuffer vb[]       = { vertex_buffer_ };
-//         VkDeviceSize offs[] = { 0 };
-//         vkCmdBindVertexBuffers(cmd, 0, 1, vb, offs);
-//         vkCmdBindIndexBuffer(cmd, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
-//         vkCmdDrawIndexed(cmd, static_cast<uint32_t>(index_count_), 1, 0, 0, 0);
-//     }
-
-//     // ===== 4) ImGui overlay =====
-//     ImDrawData* draw_data = ImGui::GetDrawData();
-//     if (draw_data && draw_data->CmdListsCount > 0) {
-//         ImGui_ImplVulkan_RenderDrawData(draw_data, cmd, VK_NULL_HANDLE);
-//     }
-
-//     vkCmdEndRenderPass(cmd);
-
-//     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
-//         throw std::runtime_error("failed to record command buffer");
-//     }
-// }
 void VulkanRenderer::record_command_buffer(uint32_t imageIndex)
 {
     VkCommandBuffer cmd = command_buffers_[imageIndex];
@@ -1416,7 +1272,6 @@ void VulkanRenderer::record_command_buffer(uint32_t imageIndex)
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_);
 
-    // 绑定纹理数组（set = 0, binding = 0）
     vkCmdBindDescriptorSets(
         cmd,
         VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1428,19 +1283,18 @@ void VulkanRenderer::record_command_buffer(uint32_t imageIndex)
         nullptr
     );
 
-    // 公共 push 常量：这一帧所有物体共享
+    // shared push constant
     PushConstants pc{};
     pc.mvp = mvp_;
 
-    // 从 set_shadow_params 里填过来的数据
-    pc.params0 = glm::vec4(light_dir_, 0.0f);                 // w 先占位，后面根据物体改
+    pc.params0 = glm::vec4(light_dir_, 0.0f);
     pc.params1 = glm::vec4(shadow_box_center_, shadow_box_radius_);
     pc.params2 = glm::vec4(shadow_cloth_center_, 1.0f);
     pc.params3 = glm::vec4(shadow_cloth_size_, 0.0f, 0.0f);
 
-    // ===== 1) 地面 =====
+    // ground
     if (ground_index_count_ > 0) {
-        pc.params0.w = float(TEX_INDEX_GROUND);   // 4
+        pc.params0.w = float(TEX_INDEX_GROUND);
 
         vkCmdPushConstants(
             cmd,
@@ -1458,9 +1312,9 @@ void VulkanRenderer::record_command_buffer(uint32_t imageIndex)
         vkCmdDrawIndexed(cmd, ground_index_count_, 1, 0, 0, 0);
     }
 
-    // ===== 2) 方块 =====
+    // cube
     if (cube_index_count_ > 0) {
-        pc.params0.w = float(TEX_INDEX_CUBE);     // 3
+        pc.params0.w = float(TEX_INDEX_CUBE);
 
         vkCmdPushConstants(
             cmd,
@@ -1478,9 +1332,9 @@ void VulkanRenderer::record_command_buffer(uint32_t imageIndex)
         vkCmdDrawIndexed(cmd, cube_index_count_, 1, 0, 0, 0);
     }
 
-    // ===== 3) 布 =====
+    // cloth
     if (index_count_ > 0) {
-        // current_material_ = 0,1,2 （Silk/Heavy/Plastic）
+        // current_material_ = 0,1,2 （Elastane/Cotton/PVC）
         pc.params0.w = float(current_material_);
 
         vkCmdPushConstants(
@@ -1761,16 +1615,16 @@ bool VulkanRenderer::create_cloth_textures()
 
     for (int i = 0; i < MAX_TEXTURES; ++i) {
 
-        // ===== 1) 用 stb_image 读取 PNG =====
+        // use stb_image to read PNG =====
         std::string path;
         if (i < CLOTH_TEX_COUNT) {
-            // 0,1,2 -> 布的纹理
+            // 0,1,2 -> cloth texture
             path = "../assets/textures/" + std::to_string(i) + ".png";
         } else if (i == TEX_INDEX_CUBE) {
-            // 3 -> 方块
+            // 3 -> cube
             path = "../assets/textures/kaust.png";
         } else if (i == TEX_INDEX_GROUND) {
-            // 4 -> 地面
+            // 4 -> ground
             path = "../assets/textures/ground.png";
         } else {
             path = "../assets/textures/0.png";
@@ -1785,15 +1639,11 @@ bool VulkanRenderer::create_cloth_textures()
             return false;
         }
 
-        // std::cerr << "Loaded texture " << path
-        //           << " (" << texWidth << "x" << texHeight
-        //           << ", channels=" << texChannels << ")\n";
-
         VkDeviceSize imageSize = static_cast<VkDeviceSize>(texWidth) *
                                  static_cast<VkDeviceSize>(texHeight) * 4;
         
 
-        // ===== 2) 创建 staging buffer（HOST_VISIBLE，TRANSFER_SRC） =====
+        // create staging buffer
         VkBuffer stagingBuffer = VK_NULL_HANDLE;
         VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
 
@@ -1834,10 +1684,9 @@ bool VulkanRenderer::create_cloth_textures()
             vkUnmapMemory(device_, stagingMemory);
         }
 
-        // 原始像素不用了
         stbi_image_free(pixels);
 
-        // ===== 3) 创建 GPU image（optimal tiling，device local） =====
+        // create GPU image
         {
             VkImageCreateInfo imgInfo{};
             imgInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1848,7 +1697,7 @@ bool VulkanRenderer::create_cloth_textures()
             imgInfo.mipLevels     = 1;
             imgInfo.arrayLayers   = 1;
             imgInfo.format        = format;
-            imgInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;  // ★ optimal
+            imgInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
             imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             imgInfo.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             imgInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
@@ -1881,7 +1730,7 @@ bool VulkanRenderer::create_cloth_textures()
             vkBindImageMemory(device_, cloth_images_[i], cloth_image_memory_[i], 0);
         }
 
-        // ===== 4) 用 single-time command buffer 做 layout 转换 + 拷贝 =====
+        // use single-time command buffer for layout copying
         VkCommandBuffer cmd = begin_single_time_commands();
 
         // UNDEFINED -> TRANSFER_DST_OPTIMAL
@@ -1953,11 +1802,10 @@ bool VulkanRenderer::create_cloth_textures()
 
         end_single_time_commands(cmd);
 
-        // staging buffer 不再需要
         vkDestroyBuffer(device_, stagingBuffer, nullptr);
         vkFreeMemory(device_, stagingMemory, nullptr);
 
-        // ===== 5) 为这个 image 创建 image view =====
+        // create image view
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image    = cloth_images_[i];
