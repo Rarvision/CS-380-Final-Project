@@ -1,11 +1,7 @@
-Real-Time Cloth Simulation with CUDA and Vulkan
-
-CS 380 Semester Project – KAUST
-Author: Mao Zhang (ID: 218329)
-
-
 OVERVIEW
 --------
+![Cloth Simulation Screenshot](assets/pngs/cotton.png)
+![Cloth Simulation Screenshot](assets/pngs/PVC.png)
 
 This project implements an interactive real-time cloth simulation system using
 CUDA for physics computation, Vulkan for real-time rendering, and Dear ImGui for
