@@ -18,9 +18,9 @@ layout(push_constant) uniform Push {
 
 void main()
 {
-    vNormal   = inNormal;   // 你现在的顶点 normal 已经是世界空间
+    vNormal   = inNormal;
     vUV       = inUV;
-    vWorldPos = inPos;      // model = I，各物体直接用世界坐标
+    vWorldPos = inPos;
 
     gl_Position = pc.uMVP * vec4(inPos, 1.0);
 }

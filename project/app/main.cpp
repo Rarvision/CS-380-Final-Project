@@ -312,8 +312,8 @@ int main()
     glfwSetCursorPosCallback(window, cursor_pos_callback);
 
     UIState ui;
-    // defult material: elastane
-    ui.current_material_index = 0;
+    // defult material: cotton
+    ui.current_material_index = 1;
     apply_material_preset(ui);
 
     ui.prev_cloth_mass     = ui.cloth_mass;

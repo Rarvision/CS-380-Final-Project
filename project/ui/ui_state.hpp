@@ -32,18 +32,18 @@ struct UIState {
     bool  prev_pin_top_edge  = true;
     bool  request_reset_hang = false;
 
-    // material selection 0: Elastane 1: stiff fabric 2: PVC
+    // material selection 0: Elastane 1: Cotton 2: PVC
     int   current_material_index = 0;  // 0,1,2
     int   prev_material_index    = 0;
 
     // default preset of materials
     ClothMaterialPreset elastane_preset   { 0.015f,  8000.0f, 18000.0f, 12000.0f };
-    ClothMaterialPreset stiff_preset  { 0.030f, 16000.0f, 26000.0f, 20000.0f };
+    ClothMaterialPreset cotton_preset  { 0.030f, 16000.0f, 26000.0f, 20000.0f };
     ClothMaterialPreset pvc_preset{ 0.020f, 12000.0f, 30000.0f, 26000.0f };
 
     const char* material_names[3] = {
         "Elastane",
-        "Stiff Cloth",
+        "Cotton",
         "PVC"
     };
 
@@ -60,7 +60,7 @@ static void apply_material_preset(UIState& ui)
         ui.cloth_k_bend   = 3000.0f;
         break;
 
-    case 1: // heavy cloth
+    case 1: // cotton
         ui.cloth_mass     = 0.050f;
         ui.cloth_k_struct = 45000.0f;
         ui.cloth_k_shear  = 28000.0f;
